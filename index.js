@@ -8,18 +8,16 @@ const {
     delay
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
-const fs = require("fs-extra");
+const fs = require("fs");
 const path = require("path");
-const express = require("express");
+const http = require("http");
 
-const app = express();
 const PORT = process.env.PORT || 8000;
 
-app.get("/", (req, res) => {
-    res.send("乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 is Running Successfully!");
-});
-
-app.listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`));
+http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("RFK-BOT is Running Successfully!");
+}).listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`));
 
 const SESSION_DIR = path.join(__dirname, "session");
 const PREFIX = process.env.PREFIX || ".";
@@ -60,14 +58,14 @@ function loadPlugins() {
 
 async function restoreSession() {
     const sessionEnv = process.env.SESSION_ID;
+    if (!fs.existsSync(SESSION_DIR)) {
+        fs.mkdirSync(SESSION_DIR, { recursive: true });
+    }
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
-        fs.emptyDirSync(SESSION_DIR);
         const base64Data = sessionEnv.replace("RFK-BOT~", "").trim();
         const credsBuffer = Buffer.from(base64Data, "base64");
         fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
         console.log("✅ Session restored from SESSION_ID!");
-    } else {
-        fs.ensureDirSync(SESSION_DIR);
     }
 }
 
@@ -206,4 +204,3 @@ async function startBot() {
     loadPlugins();
     await startBot();
 })();
-
