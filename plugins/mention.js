@@ -1,5 +1,8 @@
+
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+const { exec } = require("child_process");
 const axios = require("axios");
 
 const dbPath = path.join(__dirname, "mention_data.json");
@@ -25,8 +28,34 @@ function saveData(data) {
     fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
 }
 
+async function convertToVoiceNote(url) {
+    const res = await axios.get(url, { responseType: "arraybuffer", timeout: 20000 });
+    const tmpDir = os.tmpdir();
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const inPath = path.join(tmpDir, `${id}_in`);
+    const outPath = path.join(tmpDir, `${id}_out.ogg`);
+
+    fs.writeFileSync(inPath, Buffer.from(res.data));
+
+    return new Promise((resolve, reject) => {
+        exec(
+            `ffmpeg -y -i "${inPath}" -vn -c:a libopus -b:a 48k -ac 1 -ar 48000 "${outPath}"`,
+            (err) => {
+                try { fs.unlinkSync(inPath); } catch {}
+                if (err) {
+                    try { fs.unlinkSync(outPath); } catch {}
+                    return reject(err);
+                }
+                const audioBuf = fs.readFileSync(outPath);
+                try { fs.unlinkSync(outPath); } catch {}
+                resolve(audioBuf);
+            }
+        );
+    });
+}
+
 module.exports = [
-    // 1. Auto-Reply when Mentioned / Tagged / Replied
+    // 1. Auto-Reply when Mentioned / Tagged
     {
         on: "message",
         async execute({ sock, msg, jid, fromMe }) {
@@ -59,10 +88,13 @@ module.exports = [
                 isTargetNum(quotedParticipant);
 
             if (!isTagged) return;
-            // സ്വന്തം ഫോണിൽ നിന്ന് ടാഗ് ചെയ്യുമ്പോൾ മറ്റൊരു മെസ്സേജ് അല്ലാത്തതിനാൽ ലൂപ്പ് ഒഴിവാക്കുന്നു
             if (fromMe && !mentioned.length) return;
 
-            const randomUrl = data.urls[Math.floor(Math.random() * data.urls.length)];
+            // .jpg thumbnail URLs ഒഴിവാക്കി ശരിയായ ഓഡിയോ/വീഡിയോ ലിങ്ക് മാത്രം എടുക്കുന്നു
+            const validUrls = data.urls.filter((u) => !/\.(jpg|jpeg|png|webp)$/i.test(u));
+            if (!validUrls.length) return;
+
+            const randomUrl = validUrls[Math.floor(Math.random() * validUrls.length)];
             const opts = data.options || {};
 
             let quotedMsg = opts.quoted || msg;
@@ -74,25 +106,33 @@ module.exports = [
                 } catch {}
             }
 
-            const messagePayload =
-                data.type === "video"
-                    ? { video: { url: randomUrl }, caption: opts.caption || "" }
-                    : {
-                          audio: { url: randomUrl },
-                          mimetype: "audio/mp4",
-                          ptt: opts.ptt !== undefined ? opts.ptt : true,
-                          waveform: opts.waveform || [0, 99, 0, 99, 99, 0, 99, 0]
-                      };
-
             try {
-                await sock.sendMessage(jid, messagePayload, { quoted: quotedMsg });
+                if (data.type === "video") {
+                    await sock.sendMessage(
+                        jid,
+                        { video: { url: randomUrl }, caption: opts.caption || "" },
+                        { quoted: quotedMsg }
+                    );
+                } else {
+                    const oggBuffer = await convertToVoiceNote(randomUrl);
+                    await sock.sendMessage(
+                        jid,
+                        {
+                            audio: oggBuffer,
+                            mimetype: "audio/ogg; codecs=opus",
+                            ptt: opts.ptt !== undefined ? opts.ptt : true,
+                            waveform: opts.waveform || [0, 99, 0, 99, 99, 0, 99, 0]
+                        },
+                        { quoted: quotedMsg }
+                    );
+                }
             } catch (err) {
                 console.error("Mention send error:", err.message);
             }
         }
     },
 
-    // 2. .mention command (Supports setting everything directly from WhatsApp!)
+    // 2. .mention command
     {
         pattern: "mention",
         type: "manage",
@@ -107,10 +147,10 @@ module.exports = [
                     `• *Type:* ${data.type}\n` +
                     `• *Total Songs:* ${data.urls.length}\n\n` +
                     `*Usage:*\n` +
-                    `• \`.mention on\` / \`.mention off\`\n` +
-                    `• \`.mention clear\` (സേവ് ചെയ്ത ലിങ്കുകൾ കളയാൻ)\n` +
-                    `• \`.mention get\` (നിലവിലെ സെറ്റിംഗ്സ് കാണാൻ)\n` +
-                    `• \`.mention url1 url2 type/audio {"ptt":true,...}\``
+                    `• \`mention on\` / \`mention off\`\n` +
+                    `• \`mention clear\`\n` +
+                    `• \`mention get\`\n` +
+                    `• \`mention url1 url2 type/audio {"ptt":true,...}\``
                 );
             }
 
@@ -137,20 +177,23 @@ module.exports = [
 
             if (cmd === "get") {
                 if (!data.urls.length) return reply("⚠️ നിലവിൽ ലിങ്കുകളൊന്നും സേവ് ചെയ്തിട്ടില്ല.");
-                return reply(`📋 *Current Mention Config:*\n\n${data.urls.join(",")} type/${data.type} ${JSON.stringify(data.options)}`);
+                return reply(`📋 *Current Mention Config:*\n\n${data.urls.join(" ")} type/${data.type} ${JSON.stringify(data.options)}`);
             }
 
-            const urlMatches = text.match(/https?:\/\/[^\s,"{}]+/g);
+            // JSON ഭാഗത്തിന് മുൻപുള്ള ഭാഗത്ത് നിന്ന് മാത്രം ലിങ്കുകൾ എടുക്കുന്നു (thumbnail URL കയറാതിരിക്കാൻ)
+            const jsonStart = text.indexOf("{");
+            const urlPart = jsonStart !== -1 ? text.slice(0, jsonStart) : text;
+            const urlMatches = urlPart.match(/https?:\/\/[^\s,"{}]+/g);
+
             if (urlMatches && urlMatches.length > 0) {
                 data.urls = urlMatches;
                 data.enabled = true;
 
-                const typeMatch = text.match(/type\/(audio|video)/i);
+                const typeMatch = urlPart.match(/type\/(audio|video)/i);
                 if (typeMatch) {
                     data.type = typeMatch[1].toLowerCase();
                 }
 
-                const jsonStart = text.indexOf("{");
                 if (jsonStart !== -1) {
                     try {
                         data.options = JSON.parse(text.slice(jsonStart));
