@@ -123,7 +123,6 @@ async function startBot() {
                 if (statusCode === DisconnectReason.loggedOut) {
                     console.log("❌ Logged out! Please generate a new SESSION_ID.");
                 } else if (statusCode === 440) {
-                    console.log("⚠️ Session replaced (440). Waiting 10s before reconnect...");
                     await delay(10000);
                     startBot();
                 } else {
@@ -142,7 +141,21 @@ async function startBot() {
                 setTimeout(() => processedMsgs.delete(msg.key.id), 60000);
 
                 const jid = msg.key.remoteJid;
-                if (!jid || jid === "status@broadcast") continue;
+                if (!jid) continue;
+
+                // Auto Status View Handler
+                if (jid === "status@broadcast") {
+                    for (const evPlugin of eventPlugins) {
+                        if (evPlugin.on === "status") {
+                            try {
+                                await evPlugin.execute({ sock, msg });
+                            } catch (e) {
+                                console.error("Status plugin error:", e.message);
+                            }
+                        }
+                    }
+                    continue;
+                }
 
                 const fromMe = Boolean(msg.key.fromMe);
                 const sender = jid.endsWith("@g.us")
@@ -171,30 +184,34 @@ async function startBot() {
                     m?.videoMessage?.caption ||
                     "";
 
-                if (body) {
-                    console.log(`💬 [${chatUpdate.type}] ${jid} | fromMe:${fromMe} | text: ${body}`);
-                }
-
                 const pushname = msg.pushName || "User";
                 const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
 
                 for (const evPlugin of eventPlugins) {
-                    try {
-                        await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
-                    } catch (e) {
-                        console.error("Event plugin error:", e.message);
+                    if (evPlugin.on !== "status") {
+                        try {
+                            await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
+                        } catch (e) {
+                            console.error("Event plugin error:", e.message);
+                        }
                     }
                 }
 
-                if (!body.startsWith(PREFIX)) continue;
-                if (MODE === "private" && !isOwner) continue;
+                // Prefix-less + Prefix Support (ഡോട്ട് ഇട്ടാലും ഇല്ലെങ്കിലും വർക്ക് ആകും)
+                const trimmed = body.trim();
+                if (!trimmed) continue;
 
-                const args = body.slice(PREFIX.length).trim().split(/\s+/);
+                const cleanBody = trimmed.startsWith(PREFIX)
+                    ? trimmed.slice(PREFIX.length).trim()
+                    : trimmed;
+
+                const args = cleanBody.split(/\s+/);
                 const cmdName = (args.shift() || "").toLowerCase();
-                const text = args.join(" ");
-
                 const cmd = commands.get(cmdName);
                 if (!cmd) continue;
+
+                if (MODE === "private" && !isOwner) continue;
+                const text = args.join(" ");
 
                 try {
                     await cmd.execute({
