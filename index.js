@@ -1,4 +1,3 @@
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -15,14 +14,21 @@ const pluginsDir = path.join(__dirname, "plugins");
 fs.ensureDirSync(pluginsDir);
 
 const commands = new Map();
+const eventListeners = [];
 const startTime = Date.now();
 
 function registerCommand(cmdObj) {
-    commands.set(cmdObj.pattern.toLowerCase(), cmdObj);
+    if (cmdObj.on === "message" && typeof cmdObj.execute === "function") {
+        eventListeners.push(cmdObj);
+    }
+    if (cmdObj.pattern) {
+        commands.set(cmdObj.pattern.toLowerCase(), cmdObj);
+    }
 }
 
 function loadPlugins() {
     commands.clear();
+    eventListeners.length = 0;
     const files = fs.readdirSync(pluginsDir).filter(f => f.endsWith(".js"));
     for (const file of files) {
         try {
@@ -30,7 +36,7 @@ function loadPlugins() {
             const plugin = require(path.join(pluginsDir, file));
             if (Array.isArray(plugin)) {
                 plugin.forEach(p => registerCommand(p));
-            } else if (plugin && plugin.pattern) {
+            } else if (plugin) {
                 registerCommand(plugin);
             }
         } catch (err) {
@@ -47,7 +53,25 @@ function formatUptime(ms) {
     return `${String(hrs).padStart(2, "0")}:${String(min).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+async function setupSessionFromEnv() {
+    const sessionDir = path.join(__dirname, "session");
+    fs.ensureDirSync(sessionDir);
+    const credsFile = path.join(sessionDir, "creds.json");
+
+    if (config.SESSION_ID && config.SESSION_ID.startsWith("RFK-BOT~") && !fs.existsSync(credsFile)) {
+        try {
+            const base64Data = config.SESSION_ID.replace("RFK-BOT~", "").trim();
+            const decoded = Buffer.from(base64Data, "base64").toString("utf-8");
+            fs.writeFileSync(credsFile, decoded);
+            console.log("✅ Session restored from SESSION_ID!");
+        } catch (e) {
+            console.error("❌ Invalid SESSION_ID:", e.message);
+        }
+    }
+}
+
 async function startRFKBot() {
+    await setupSessionFromEnv();
     const { state, saveCreds } = await useMultiFileAuthState("./session");
     const { version } = await fetchLatestBaileysVersion();
 
@@ -101,6 +125,16 @@ async function startRFKBot() {
             msg.message.videoMessage?.caption ||
             "";
 
+        const reply = (txt) => sock.sendMessage(jid, { text: txt }, { quoted: msg });
+
+        for (const listener of eventListeners) {
+            try {
+                await listener.execute({ sock, msg, jid, body, reply, sender, pushName, fromMe });
+            } catch (err) {
+                console.error("Listener Error:", err.message);
+            }
+        }
+
         if (!body.startsWith(config.PREFIX)) return;
 
         const isOwner = fromMe || sender.includes(config.OWNER_NUMBER);
@@ -109,8 +143,6 @@ async function startRFKBot() {
         const args = body.slice(config.PREFIX.length).trim().split(/ +/);
         const cmdName = args.shift().toLowerCase();
         const text = args.join(" ");
-
-        const reply = (txt) => sock.sendMessage(jid, { text: txt }, { quoted: msg });
 
         if (cmdName === "ping" || cmdName === "rfk") {
             const start = Date.now();
