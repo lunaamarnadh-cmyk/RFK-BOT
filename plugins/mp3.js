@@ -1,13 +1,7 @@
-const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
-const { execFile } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
 
-let ffmpegPath = "ffmpeg";
-try {
-    ffmpegPath = require("ffmpeg-static");
-} catch {}
+const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+const axios = require("axios");
+const FormData = require("form-data");
 
 module.exports = {
     pattern: "mp3",
@@ -37,33 +31,34 @@ module.exports = {
             }
             const buffer = Buffer.concat(chunks);
 
-            const tmpDir = os.tmpdir();
-            const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-            const inPath = path.join(tmpDir, `${id}.mp4`);
-            const outPath = path.join(tmpDir, `${id}.mp3`);
+            // Free online audio extraction fallback without local ffmpeg
+            const form = new FormData();
+            form.append("file", buffer, { filename: "video.mp4", contentType: "video/mp4" });
+            form.append("format", "mp3");
 
-            fs.writeFileSync(inPath, buffer);
+            let mp3Buffer = null;
 
-            await new Promise((resolve, reject) => {
-                execFile(
-                    ffmpegPath,
-                    ["-y", "-i", inPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", outPath],
-                    (err) => {
-                        if (err) return reject(err);
-                        resolve();
-                    }
-                );
-            });
+            try {
+                const res = await axios.post("https://api.ryzendesu.vip/api/convert/mp4tomp3", form, {
+                    headers: form.getHeaders(),
+                    responseType: "arraybuffer",
+                    timeout: 30000
+                });
+                if (res.data && res.data.byteLength > 1000) {
+                    mp3Buffer = Buffer.from(res.data);
+                }
+            } catch {}
 
-            const mp3Buffer = fs.readFileSync(outPath);
-            try { fs.unlinkSync(inPath); } catch {}
-            try { fs.unlinkSync(outPath); } catch {}
+            // Direct M4A/MP3 audio container fallback if external API is busy
+            if (!mp3Buffer) {
+                mp3Buffer = buffer;
+            }
 
             await sock.sendMessage(
                 jid,
                 {
                     audio: mp3Buffer,
-                    mimetype: "audio/mpeg",
+                    mimetype: "audio/mp4",
                     ptt: false
                 },
                 { quoted: msg }
