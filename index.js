@@ -1,261 +1,210 @@
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    Browsers,
+    delay
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs-extra");
 const path = require("path");
-const axios = require("axios");
-const config = require("./config");
+const express = require("express");
 
-const pluginsDir = path.join(__dirname, "plugins");
-fs.ensureDirSync(pluginsDir);
+const app = express();
+const PORT = process.env.PORT || 8000;
+
+app.get("/", (req, res) => {
+    res.send("乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 is Running Successfully!");
+});
+
+app.listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`));
+
+const SESSION_DIR = path.join(__dirname, "session");
+const PREFIX = process.env.PREFIX || ".";
+const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
+const MODE = (process.env.MODE || "public").toLowerCase();
 
 const commands = new Map();
-const eventListeners = [];
-const startTime = Date.now();
-
-function registerCommand(cmdObj) {
-    if (cmdObj.on === "message" && typeof cmdObj.execute === "function") {
-        eventListeners.push(cmdObj);
-    }
-    if (cmdObj.pattern) {
-        commands.set(cmdObj.pattern.toLowerCase(), cmdObj);
-    }
-}
+const eventPlugins = [];
 
 function loadPlugins() {
     commands.clear();
-    eventListeners.length = 0;
-    const files = fs.readdirSync(pluginsDir).filter(f => f.endsWith(".js"));
+    eventPlugins.length = 0;
+    const pluginDir = path.join(__dirname, "plugins");
+    if (!fs.existsSync(pluginDir)) return;
+
+    const files = fs.readdirSync(pluginDir).filter((f) => f.endsWith(".js"));
     for (const file of files) {
         try {
-            delete require.cache[require.resolve(path.join(pluginsDir, file))];
-            const plugin = require(path.join(pluginsDir, file));
-            if (Array.isArray(plugin)) {
-                plugin.forEach(p => registerCommand(p));
-            } else if (plugin) {
-                registerCommand(plugin);
+            delete require.cache[require.resolve(path.join(pluginDir, file))];
+            const plugin = require(path.join(pluginDir, file));
+            const list = Array.isArray(plugin) ? plugin : [plugin];
+            for (const item of list) {
+                if (item.pattern) {
+                    commands.set(item.pattern.toLowerCase(), item);
+                    if (Array.isArray(item.alias)) {
+                        item.alias.forEach((a) => commands.set(a.toLowerCase(), item));
+                    }
+                } else if (item.on) {
+                    eventPlugins.push(item);
+                }
             }
         } catch (err) {
-            console.error(`Error loading plugin ${file}:`, err.message);
+            console.error(`❌ Error loading plugin ${file}:`, err.message);
         }
     }
+    console.log(`📦 Loaded ${commands.size} commands & ${eventPlugins.length} event handlers.`);
 }
+
+async function restoreSession() {
+    const sessionEnv = process.env.SESSION_ID;
+    if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
+        fs.emptyDirSync(SESSION_DIR);
+        const base64Data = sessionEnv.replace("RFK-BOT~", "").trim();
+        const credsBuffer = Buffer.from(base64Data, "base64");
+        fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
+        console.log("✅ Session restored from SESSION_ID!");
+    } else {
+        fs.ensureDirSync(SESSION_DIR);
+    }
+}
+
+let isConnecting = false;
+const startTime = Date.now();
 
 function formatUptime(ms) {
-    let sec = Math.floor(ms / 1000);
-    let hrs = Math.floor(sec / 3600);
-    let min = Math.floor((sec % 3600) / 60);
-    let s = sec % 60;
-    return `${String(hrs).padStart(2, "0")}:${String(min).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    const sec = Math.floor((ms / 1000) % 60);
+    const min = Math.floor((ms / (1000 * 60)) % 60);
+    const hr = Math.floor((ms / (1000 * 60 * 60)) % 24);
+    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+    return `${days}d ${hr}h ${min}m ${sec}s`;
 }
 
-async function setupSessionFromEnv() {
-    const sessionDir = path.join(__dirname, "session");
-    fs.ensureDirSync(sessionDir);
-    const credsFile = path.join(sessionDir, "creds.json");
+async function startBot() {
+    if (isConnecting) return;
+    isConnecting = true;
 
-    if (config.SESSION_ID && config.SESSION_ID.startsWith("RFK-BOT~") && !fs.existsSync(credsFile)) {
-        try {
-            const base64Data = config.SESSION_ID.replace("RFK-BOT~", "").trim();
-            const decoded = Buffer.from(base64Data, "base64").toString("utf-8");
-            fs.writeFileSync(credsFile, decoded);
-            console.log("✅ Session restored from SESSION_ID!");
-        } catch (e) {
-            console.error("❌ Invalid SESSION_ID:", e.message);
-        }
-    }
-}
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+        const { version } = await fetchLatestBaileysVersion();
 
-async function startRFKBot() {
-    await setupSessionFromEnv();
-    const { state, saveCreds } = await useMultiFileAuthState("./session");
-    const { version } = await fetchLatestBaileysVersion();
+        const sock = makeWASocket({
+            version,
+            logger: pino({ level: "silent" }),
+            printQRInTerminal: false,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }))
+            },
+            browser: Browsers.ubuntu("Chrome"),
+            syncFullHistory: false,
+            markOnlineOnConnect: true
+        });
 
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: "silent" }),
-        printQRInTerminal: false,
-        auth: state,
-        browser: ["RFK-BOT", "Chrome", "1.0.0"]
-    });
+        sock.ev.on("creds.update", saveCreds);
 
-    if (!sock.authState.creds.registered && config.PAIRING_NUMBER) {
-        setTimeout(async () => {
-            try {
-                let num = config.PAIRING_NUMBER.replace(/[^0-9]/g, "");
-                let code = await sock.requestPairingCode(num);
-                console.log(`\n========================================`);
-                console.log(`🔑 RFK-BOT PAIRING CODE: ${code}`);
-                console.log(`========================================\n`);
-            } catch (e) {
-                console.error("Pairing Code Error:", e.message);
-            }
-        }, 3000);
-    }
+        sock.ev.on("connection.update", async (update) => {
+            const { connection, lastDisconnect } = update;
 
-    sock.ev.on("creds.update", saveCreds);
+            if (connection === "open") {
+                isConnecting = false;
+                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully!");
+            } else if (connection === "close") {
+                isConnecting = false;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                console.log(`⚠️ Connection closed (Code: ${statusCode})`);
 
-    sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-        if (connection === "open") {
-            console.log(`✅ ${config.BOT_NAME} Connected Successfully!`);
-            loadPlugins();
-        } else if (connection === "close") {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startRFKBot();
-        }
-    });
-
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message) return;
-
-        const jid = msg.key.remoteJid;
-        const fromMe = msg.key.fromMe;
-        const sender = msg.key.participant || jid;
-        const pushName = msg.pushName || "User";
-
-        const body =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            msg.message.imageMessage?.caption ||
-            msg.message.videoMessage?.caption ||
-            "";
-
-        const reply = (txt) => sock.sendMessage(jid, { text: txt }, { quoted: msg });
-
-        for (const listener of eventListeners) {
-            try {
-                await listener.execute({ sock, msg, jid, body, reply, sender, pushName, fromMe });
-            } catch (err) {
-                console.error("Listener Error:", err.message);
-            }
-        }
-
-        if (!body.startsWith(config.PREFIX)) return;
-
-        const isOwner = fromMe || sender.includes(config.OWNER_NUMBER);
-        if (config.MODE === "private" && !isOwner) return;
-
-        const args = body.slice(config.PREFIX.length).trim().split(/ +/);
-        const cmdName = args.shift().toLowerCase();
-        const text = args.join(" ");
-
-        if (cmdName === "ping" || cmdName === "rfk") {
-            const start = Date.now();
-            const sent = await sock.sendMessage(jid, { text: "```☭ Testing Speed... [ ░░░░░░░░░░ ] 0%```" }, { quoted: msg });
-            const frames = [
-                "```☭ Checking Server... [ ███░░░░░░░ ] 30%```",
-                "```☭ Calculating Ping.. [ ██████░░░░ ] 65%```",
-                "```☭ Almost Ready...... [ █████████░ ] 95%```"
-            ];
-            for (const f of frames) {
-                await new Promise(r => setTimeout(r, 350));
-                await sock.sendMessage(jid, { text: f, edit: sent.key });
-            }
-            const speed = Date.now() - start;
-            await sock.sendMessage(jid, {
-                text: `╭━━━〔 ☭ ${config.BOT_NAME} ☭ 〕━━━╮\n┃ ⚡ *Pong!* : *${speed} ms*\n┃ 🚀 *Status* : *Online & Fast*\n╰━━━〔 ☭ 𝐑𝐅𝐊 𝐌𝐎𝐃𝐒 ☭ 〕━━━╯`,
-                edit: sent.key
-            });
-            return;
-        }
-
-        if (cmdName === "alive") {
-            return reply(
-                `╭━━━〔 ☭ ${config.BOT_NAME} ☭ 〕━━━╮\n` +
-                `┃ 👋 *Hi* : ${pushName}\n` +
-                `┃ ⏱️ *Uptime* : ${formatUptime(Date.now() - startTime)}\n` +
-                `┃ 👑 *Owner* : ${config.OWNER_NAME}\n` +
-                `╰━━━〔 ☭ 𝐑𝐅𝐊 𝐌𝐎𝐃𝐒 ☭ 〕━━━╯`
-            );
-        }
-
-        if (cmdName === "menu" || cmdName === "m") {
-            const [date, time] = new Date().toLocaleString("en-IN", { timeZone: config.TIMEZONE }).split(",");
-            let categories = {};
-            commands.forEach((cmd) => {
-                let type = cmd.type || "misc";
-                if (!categories[type]) categories[type] = [];
-                categories[type].push(cmd.pattern);
-            });
-
-            let menu = `╭━━━〔 ☭ ${config.BOT_NAME} ☭ 〕━━━┈⊷\n`;
-            menu += `┃☭╭──────────────\n`;
-            menu += `┃☭│ *owner* : ${config.BOT_NAME}\n`;
-            menu += `┃☭│ *user* : ${pushName}\n`;
-            menu += `┃☭│ *plugins* : ${commands.size + 5}\n`;
-            menu += `┃☭│ *prefix* : ${config.PREFIX}\n`;
-            menu += `┃☭│ *date* : ${date}\n`;
-            menu += `┃☭│ *time* : ${time}\n`;
-            menu += `┃☭│ *uptime* : ${formatUptime(Date.now() - startTime)}\n`;
-            menu += `┃☭│ *version* : ᴠ${config.VERSION}\n`;
-            menu += `┃☭╰──────────────\n`;
-            menu += `╰━━━━━━━━━━━━━━━┈⊷\n\n`;
-            menu += `╭━━━━━━━━━━━━━━━┈⊷\n╽`;
-
-            for (const cat of Object.keys(categories).sort()) {
-                menu += `\n┃  ╭─────────────┈⊷\n`;
-                menu += `┃  │  ☭ *${cat} ⏎*\n`;
-                menu += `┃  ╰┬────────────┈⊷\n`;
-                menu += `┃  ┌┤`;
-                for (const c of categories[cat].sort()) {
-                    menu += `\n┃  │ ☭  *${c}*`;
+                if (statusCode === DisconnectReason.loggedOut) {
+                    console.log("❌ Logged out! Please generate a new SESSION_ID.");
+                } else if (statusCode === 440) {
+                    console.log("⚠️ Session replaced (440). Waiting 10s before reconnect...");
+                    await delay(10000);
+                    startBot();
+                } else {
+                    await delay(5000);
+                    startBot();
                 }
-                menu += `\n┃  ╰─────────────┈⊷`;
+            }
+        });
+
+        sock.ev.on("messages.upsert", async ({ messages, type }) => {
+            if (type !== "notify") return;
+            const msg = messages[0];
+            if (!msg || !msg.message) return;
+
+            const jid = msg.key.remoteJid;
+            const fromMe = msg.key.fromMe;
+            const sender = jid.endsWith("@g.us")
+                ? (msg.key.participant || jid)
+                : (fromMe ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid);
+
+            const senderNum = sender.split("@")[0].split(":")[0];
+            const botNum = sock.user.id.split(":")[0];
+            const isOwner = fromMe || senderNum === botNum || senderNum === OWNER_NUMBER;
+
+            const body =
+                msg.message.conversation ||
+                msg.message.extendedTextMessage?.text ||
+                msg.message.imageMessage?.caption ||
+                msg.message.videoMessage?.caption ||
+                "";
+
+            const pushname = msg.pushName || "User";
+            const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
+
+            // Run event plugins (e.g., autoset)
+            for (const evPlugin of eventPlugins) {
+                try {
+                    await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
+                } catch (e) {
+                    console.error("Event plugin error:", e.message);
+                }
             }
 
-            menu += ` ╰━━━━━━━━━━━┈⊷\n\n`;
-            menu += `╰━━━〔 ☭ 𝐑𝐅𝐊 𝐌𝐎𝐃𝐒 ☭ 〕━━━╯\n`;
-            menu += `Made with 🤍 by ${config.OWNER_NAME}`;
+            if (!body.startsWith(PREFIX)) return;
+            if (MODE === "private" && !isOwner) return;
 
-            if (config.BOT_IMAGE) {
-                return sock.sendMessage(jid, { image: { url: config.BOT_IMAGE }, caption: menu }, { quoted: msg });
-            }
-            return reply(menu);
-        }
+            const args = body.slice(PREFIX.length).trim().split(/\s+/);
+            const cmdName = (args.shift() || "").toLowerCase();
+            const text = args.join(" ");
 
-        if (cmdName === "plugin" && isOwner) {
-            if (!text || !text.startsWith("http")) return reply("❌ ദയവായി ഒരു GitHub Raw URL നൽകുക!");
-            try {
-                const res = await axios.get(text);
-                const fileName = `ext_${Date.now()}.js`;
-                await fs.writeFile(path.join(pluginsDir, fileName), res.data);
-                loadPlugins();
-                return reply(`✅ *New plugin installed* : \`${fileName}\``);
-            } catch (e) {
-                return reply(`❌ Plugin Install Error: ${e.message}`);
-            }
-        }
-
-        if (cmdName === "allplugin" && isOwner) {
-            const files = fs.readdirSync(pluginsDir).filter(f => f.endsWith(".js"));
-            return reply(`📦 *Installed Plugins:*\n\n` + (files.length ? files.map(f => `• \`${f.replace(".js", "")}\``).join("\n") : "No plugins installed."));
-        }
-
-        if (cmdName === "remove" && isOwner) {
-            if (!text) return reply("❌ റിമൂവ് ചെയ്യേണ്ട പ്ലഗിന്റെ പേര് നൽകുക!");
-            const target = path.join(pluginsDir, `${text.trim()}.js`);
-            if (fs.existsSync(target)) {
-                await fs.remove(target);
-                loadPlugins();
-                return reply(`🗑️ *Plugin deleted:* \`${text.trim()}\``);
-            }
-            return reply("❌ അങ്ങനെ ഒരു പ്ലഗിൻ നിലവിലില്ല!");
-        }
-
-        if (commands.has(cmdName)) {
             const cmd = commands.get(cmdName);
+            if (!cmd) return;
+
             try {
-                await cmd.execute({ sock, msg, jid, args, text, reply, sender, pushName, isOwner });
+                await cmd.execute({
+                    sock,
+                    msg,
+                    jid,
+                    sender,
+                    fromMe,
+                    isOwner,
+                    args,
+                    text,
+                    body,
+                    pushname,
+                    reply,
+                    commands,
+                    uptime: formatUptime(Date.now() - startTime)
+                });
             } catch (err) {
-                reply(`❌ Error: ${err.message}`);
+                console.error(`Command error (${cmdName}):`, err);
+                await reply(`❌ Error: ${err.message}`);
             }
-        }
-    });
+        });
+    } catch (err) {
+        isConnecting = false;
+        console.error("StartBot error:", err.message);
+        await delay(5000);
+        startBot();
+    }
 }
 
-startRFKBot();
+(async () => {
+    await restoreSession();
+    loadPlugins();
+    await startBot();
+})();
