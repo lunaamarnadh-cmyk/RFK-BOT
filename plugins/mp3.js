@@ -1,8 +1,13 @@
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+
+let ffmpegPath = "ffmpeg";
+try {
+    ffmpegPath = require("ffmpeg-static");
+} catch {}
 
 module.exports = {
     pattern: "mp3",
@@ -40,10 +45,14 @@ module.exports = {
             fs.writeFileSync(inPath, buffer);
 
             await new Promise((resolve, reject) => {
-                exec(`ffmpeg -y -i "${inPath}" -vn -acodec libmp3lame -q:a 2 "${outPath}"`, (err) => {
-                    if (err) return reject(err);
-                    resolve();
-                });
+                execFile(
+                    ffmpegPath,
+                    ["-y", "-i", inPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", outPath],
+                    (err) => {
+                        if (err) return reject(err);
+                        resolve();
+                    }
+                );
             });
 
             const mp3Buffer = fs.readFileSync(outPath);
