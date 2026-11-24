@@ -72,6 +72,7 @@ async function restoreSession() {
 
 let isConnecting = false;
 const startTime = Date.now();
+const processedMsgs = new Set();
 
 function formatUptime(ms) {
     const sec = Math.floor((ms / 1000) % 60);
@@ -128,26 +129,37 @@ async function startBot() {
             }
         });
 
-        sock.ev.on("messages.upsert", async ({ messages, type }) => {
-            if (type !== "notify") return;
+        sock.ev.on("messages.upsert", async ({ messages }) => {
             const msg = messages[0];
-            if (!msg || !msg.message) return;
+            if (!msg || !msg.message || !msg.key?.id) return;
+
+            if (processedMsgs.has(msg.key.id)) return;
+            processedMsgs.add(msg.key.id);
+            setTimeout(() => processedMsgs.delete(msg.key.id), 60000);
 
             const jid = msg.key.remoteJid;
-            const fromMe = msg.key.fromMe;
+            if (!jid || jid === "status@broadcast") return;
+
+            const fromMe = Boolean(msg.key.fromMe);
             const sender = jid.endsWith("@g.us")
                 ? (msg.key.participant || jid)
                 : (fromMe ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid);
 
             const senderNum = sender.split("@")[0].split(":")[0];
             const botNum = sock.user.id.split(":")[0];
-            const isOwner = fromMe || senderNum === botNum || senderNum === OWNER_NUMBER;
+            const botLid = (sock.user.lid || "").split("@")[0].split(":")[0];
+            const isOwner =
+                fromMe ||
+                senderNum === botNum ||
+                (botLid && senderNum === botLid) ||
+                (OWNER_NUMBER && senderNum === OWNER_NUMBER);
 
+            const m = msg.message?.ephemeralMessage?.message || msg.message?.viewOnceMessage?.message || msg.message;
             const body =
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                msg.message.imageMessage?.caption ||
-                msg.message.videoMessage?.caption ||
+                m.conversation ||
+                m.extendedTextMessage?.text ||
+                m.imageMessage?.caption ||
+                m.videoMessage?.caption ||
                 "";
 
             const pushname = msg.pushName || "User";
@@ -162,6 +174,8 @@ async function startBot() {
             }
 
             if (!body.startsWith(PREFIX)) return;
+            console.log(`📩 Command received: ${body} | fromMe: ${fromMe} | isOwner: ${isOwner}`);
+
             if (MODE === "private" && !isOwner) return;
 
             const args = body.slice(PREFIX.length).trim().split(/\s+/);
