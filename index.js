@@ -1,4 +1,3 @@
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -155,7 +154,6 @@ async function startBot() {
             const pushname = msg.pushName || "User";
             const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
 
-            // Run event plugins (e.g., autoset)
             for (const evPlugin of eventPlugins) {
                 try {
                     await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
@@ -208,3 +206,4 @@ async function startBot() {
     loadPlugins();
     await startBot();
 })();
+
