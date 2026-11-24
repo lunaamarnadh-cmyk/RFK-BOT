@@ -1,4 +1,7 @@
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+const { exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
 
 module.exports = {
     pattern: "mp3",
@@ -18,7 +21,11 @@ module.exports = {
             return reply("❌ *ഏതെങ്കിലും വീഡിയോയ്ക്ക് റിപ്ലൈ ആയി `mp3` എന്ന് അയക്കുക!*");
         }
 
-        const waitMsg = await sock.sendMessage(jid, { text: "⏳ *Converting video to Audio...*" }, { quoted: msg });
+        const waitMsg = await sock.sendMessage(jid, { text: "⏳ *Converting video to MP3...*" }, { quoted: msg });
+
+        const id = Date.now();
+        const inputPath = path.join("/tmp", `in_${id}.mp4`);
+        const outputPath = path.join("/tmp", `out_${id}.mp3`);
 
         try {
             const stream = await downloadContentFromMessage(videoObj, "video");
@@ -26,13 +33,22 @@ module.exports = {
             for await (const chunk of stream) {
                 chunks.push(chunk);
             }
-            const buffer = Buffer.concat(chunks);
+            fs.writeFileSync(inputPath, Buffer.concat(chunks));
+
+            await new Promise((resolve, reject) => {
+                exec(`ffmpeg -y -i "${inputPath}" -vn -ar 44100 -ac 2 -b:a 192k "${outputPath}"`, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
+
+            const mp3Buffer = fs.readFileSync(outputPath);
 
             await sock.sendMessage(
                 jid,
                 {
-                    audio: buffer,
-                    mimetype: "audio/mp4",
+                    audio: mp3Buffer,
+                    mimetype: "audio/mpeg",
                     ptt: false
                 },
                 { quoted: msg }
@@ -48,6 +64,9 @@ module.exports = {
                     edit: waitMsg.key
                 }
             );
+        } finally {
+            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
         }
     }
 };
