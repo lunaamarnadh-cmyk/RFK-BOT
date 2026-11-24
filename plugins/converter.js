@@ -66,21 +66,7 @@ module.exports = [
         }
     },
 
-    // 3. Image to Sticker (.sticker)
-    {
-        pattern: "sticker",
-        type: "converter",
-        async execute({ sock, msg, jid, reply }) {
-            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
-            if (quoted.imageMessage) {
-                const buffer = await downloadMedia(quoted.imageMessage, "image");
-                return sock.sendMessage(jid, { sticker: buffer }, { quoted: msg });
-            }
-            return reply("❌ ഒരു ഫോട്ടോയ്ക്ക് റിപ്ലൈ ആയി `.sticker` അയക്കുക!");
-        }
-    },
-
-    // 4. Google Translate (.trt)
+    // 3. Google Translate (.trt)
     {
         pattern: "trt",
         type: "converter",
@@ -100,7 +86,7 @@ module.exports = [
         }
     },
 
-    // 5. Text to Speech (.tts)
+    // 4. Text to Speech (.tts)
     {
         pattern: "tts",
         type: "converter",
@@ -111,7 +97,7 @@ module.exports = [
         }
     },
 
-    // 6. Fancy Stylish Text (.fancy)
+    // 5. Fancy Stylish Text (.fancy)
     {
         pattern: "fancy",
         type: "converter",
