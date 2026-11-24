@@ -1,16 +1,2 @@
-{
-  "name": "rfk-bot",
-  "version": "1.0.0",
-  "description": "乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 WhatsApp MD Bot",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.8",
-    "express": "^4.19.2",
-    "fs-extra": "^11.2.0",
-    "pino": "^8.19.0",
-    "axios": "^1.7.2"
-  }
-}
+
+"ffmpeg-static": "^5.2.0",
