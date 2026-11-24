@@ -1,118 +1,104 @@
-const fs = require("fs-extra");
+const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const config = require("../config");
 
 const dbPath = path.join(__dirname, "mention_data.json");
 
-// Default data with your links & custom quoted card
-if (!fs.existsSync(dbPath)) {
-    fs.writeJsonSync(dbPath, {
-        enabled: true,
-        type: "audio",
-        urls: [
-            "https://lokixer.onrender.com/file/aqcyuwloivpip.mp4",
-            "https://lokixer.onrender.com/file/ucwkbsoldleij.mp4",
-            "https://lokixer.onrender.com/file/eumvohmdcwuml.mp4",
-            "https://lokixer.onrender.com/file/fcrjqrherlatk.mp4",
-            "https://lokixer.onrender.com/file/shviuorcjynew.mp4",
-            "https://lokixer.onrender.com/file/yuqxhuyqtochc.mp4",
-            "https://lokixer.onrender.com/file/pybjhkbpprpyr.mp4",
-            "https://lokixer.onrender.com/file/bbbcdpyudnshq.mp4",
-            "https://lokixer.onrender.com/file/upzsgfuoxllsh.mp4",
-            "https://lokixer.onrender.com/file/hkvxuzaiilqxd.mp4",
-            "https://lokixer.onrender.com/file/oueygkwnnbwmn.mp4",
-            "https://lokixer.onrender.com/file/bmiycqfrhfrjw.mp4",
-            "https://lokixer.onrender.com/file/tvxljfgssbawv.mp4",
-            "https://lokixer.onrender.com/file/ludpblypyxgio.mp4",
-            "https://lokixer.onrender.com/file/uoeespshesinb.mp4",
-            "https://lokixer.onrender.com/file/sbmmgqhzyvmjc.mp4",
-            "https://lokixer.onrender.com/file/rcmygyeegkbdy.mp4"
-        ],
-        options: {
-            ptt: true,
-            waveform: [0, 99, 0, 99, 99, 0, 99, 0],
-            quoted: {
-                key: {
-                    fromMe: false,
-                    participant: "0@s.whatsapp.net",
-                    remoteJid: "status@broadcast"
-                },
-                message: {
-                    contactMessage: {
-                        displayName: "RFK-BOT-MD",
-                        vcard: "BEGIN:VCARD\nVERSION:3.0\nN:XL;RFK,;;;\nFN:RFK,\nitem1.TEL;waid=918848047689:918848047689\nitem1.X-ABLabel:Ponsel\nEND:VCARD",
-                        jpegThumbnailUrl: "https://files.catbox.moe/c6gg07.jpg"
-                    }
-                }
+function getData() {
+    if (!fs.existsSync(dbPath)) {
+        const defaultData = {
+            enabled: false,
+            type: "audio",
+            urls: [],
+            options: {
+                ptt: true,
+                waveform: [0, 99, 0, 99, 99, 0, 99, 0]
             }
-        }
-    });
+        };
+        fs.writeFileSync(dbPath, JSON.stringify(defaultData, null, 2));
+        return defaultData;
+    }
+    return JSON.parse(fs.readFileSync(dbPath, "utf8"));
+}
+
+function saveData(data) {
+    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
 }
 
 module.exports = [
-    // 1. Auto-Reply when Mentioned / Tagged
+    // 1. Auto-Reply when Mentioned / Tagged / Replied
     {
         on: "message",
         async execute({ sock, msg, jid, fromMe }) {
-            if (fromMe) return;
-            const data = fs.readJsonSync(dbPath);
+            const data = getData();
             if (!data.enabled || !data.urls || !data.urls.length) return;
 
-            const botId = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-            const ownerJid = config.OWNER_NUMBER + "@s.whatsapp.net";
+            const botNum = (sock.user?.id || "").split(":")[0].split("@")[0];
+            const botLid = (sock.user?.lid || "").split(":")[0].split("@")[0];
+            const ownerNum = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
+
+            const m =
+                msg.message?.ephemeralMessage?.message ||
+                msg.message?.viewOnceMessage?.message ||
+                msg.message;
 
             const contextInfo =
-                msg.message?.extendedTextMessage?.contextInfo ||
-                msg.message?.imageMessage?.contextInfo ||
-                msg.message?.videoMessage?.contextInfo ||
+                m?.extendedTextMessage?.contextInfo ||
+                m?.imageMessage?.contextInfo ||
+                m?.videoMessage?.contextInfo ||
                 {};
 
             const mentioned = contextInfo.mentionedJid || [];
-            const quotedParticipant = contextInfo.participant || "";
+            const quotedParticipant = (contextInfo.participant || "").split(":")[0].split("@")[0];
+
+            const isTargetNum = (num) =>
+                Boolean(num) && (num === botNum || num === botLid || num === ownerNum);
 
             const isTagged =
-                mentioned.includes(botId) ||
-                mentioned.includes(ownerJid) ||
-                quotedParticipant === botId ||
-                quotedParticipant === ownerJid;
+                mentioned.some((id) => isTargetNum(id.split(":")[0].split("@")[0])) ||
+                isTargetNum(quotedParticipant);
 
-            if (isTagged) {
-                const randomUrl = data.urls[Math.floor(Math.random() * data.urls.length)];
-                const opts = data.options || {};
+            if (!isTagged) return;
+            // സ്വന്തം ഫോണിൽ നിന്ന് ടാഗ് ചെയ്യുമ്പോൾ മറ്റൊരു മെസ്സേജ് അല്ലാത്തതിനാൽ ലൂപ്പ് ഒഴിവാക്കുന്നു
+            if (fromMe && !mentioned.length) return;
 
-                // Fetch thumbnail buffer if jpegThumbnailUrl is set
-                let quotedMsg = opts.quoted || msg;
-                if (quotedMsg?.message?.contactMessage?.jpegThumbnailUrl && !quotedMsg.message.contactMessage.jpegThumbnail) {
-                    try {
-                        const thumbRes = await axios.get(quotedMsg.message.contactMessage.jpegThumbnailUrl, { responseType: "arraybuffer" });
-                        quotedMsg = JSON.parse(JSON.stringify(quotedMsg));
-                        quotedMsg.message.contactMessage.jpegThumbnail = Buffer.from(thumbRes.data);
-                    } catch (e) {}
-                }
+            const randomUrl = data.urls[Math.floor(Math.random() * data.urls.length)];
+            const opts = data.options || {};
 
-                const messagePayload =
-                    data.type === "video"
-                        ? { video: { url: randomUrl }, caption: opts.caption || "" }
-                        : {
-                              audio: { url: randomUrl },
-                              mimetype: "audio/mp4",
-                              ptt: opts.ptt !== undefined ? opts.ptt : true,
-                              waveform: opts.waveform || [0, 99, 0, 99, 99, 0, 99, 0]
-                          };
+            let quotedMsg = opts.quoted || msg;
+            if (quotedMsg?.message?.contactMessage?.jpegThumbnailUrl && !quotedMsg.message.contactMessage.jpegThumbnail) {
+                try {
+                    const thumbRes = await axios.get(quotedMsg.message.contactMessage.jpegThumbnailUrl, { responseType: "arraybuffer" });
+                    quotedMsg = JSON.parse(JSON.stringify(quotedMsg));
+                    quotedMsg.message.contactMessage.jpegThumbnail = Buffer.from(thumbRes.data);
+                } catch {}
+            }
 
+            const messagePayload =
+                data.type === "video"
+                    ? { video: { url: randomUrl }, caption: opts.caption || "" }
+                    : {
+                          audio: { url: randomUrl },
+                          mimetype: "audio/mp4",
+                          ptt: opts.ptt !== undefined ? opts.ptt : true,
+                          waveform: opts.waveform || [0, 99, 0, 99, 99, 0, 99, 0]
+                      };
+
+            try {
                 await sock.sendMessage(jid, messagePayload, { quoted: quotedMsg });
+            } catch (err) {
+                console.error("Mention send error:", err.message);
             }
         }
     },
 
-    // 2. .mention command (Supports your exact format!)
+    // 2. .mention command (Supports setting everything directly from WhatsApp!)
     {
         pattern: "mention",
         type: "manage",
         async execute({ text, reply, isOwner }) {
             if (!isOwner) return;
-            const data = fs.readJsonSync(dbPath);
+            const data = getData();
 
             if (!text) {
                 return reply(
@@ -122,28 +108,38 @@ module.exports = [
                     `• *Total Songs:* ${data.urls.length}\n\n` +
                     `*Usage:*\n` +
                     `• \`.mention on\` / \`.mention off\`\n` +
+                    `• \`.mention clear\` (സേവ് ചെയ്ത ലിങ്കുകൾ കളയാൻ)\n` +
                     `• \`.mention get\` (നിലവിലെ സെറ്റിംഗ്സ് കാണാൻ)\n` +
                     `• \`.mention url1 url2 type/audio {"ptt":true,...}\``
                 );
             }
 
-            if (text.toLowerCase() === "on") {
+            const cmd = text.trim().toLowerCase();
+
+            if (cmd === "on") {
                 data.enabled = true;
-                fs.writeJsonSync(dbPath, data);
+                saveData(data);
                 return reply("✅ *Mention Auto-Reply ON!*");
             }
 
-            if (text.toLowerCase() === "off") {
+            if (cmd === "off") {
                 data.enabled = false;
-                fs.writeJsonSync(dbPath, data);
+                saveData(data);
                 return reply("❌ *Mention Auto-Reply OFF!*");
             }
 
-            if (text.toLowerCase() === "get") {
+            if (cmd === "clear") {
+                data.urls = [];
+                data.enabled = false;
+                saveData(data);
+                return reply("🗑️ *എല്ലാ Mention ലിങ്കുകളും ക്ലിയർ ചെയ്തു!*");
+            }
+
+            if (cmd === "get") {
+                if (!data.urls.length) return reply("⚠️ നിലവിൽ ലിങ്കുകളൊന്നും സേവ് ചെയ്തിട്ടില്ല.");
                 return reply(`📋 *Current Mention Config:*\n\n${data.urls.join(",")} type/${data.type} ${JSON.stringify(data.options)}`);
             }
 
-            // Parse URLs, type/audio or type/video, and JSON options
             const urlMatches = text.match(/https?:\/\/[^\s,"{}]+/g);
             if (urlMatches && urlMatches.length > 0) {
                 data.urls = urlMatches;
@@ -163,7 +159,7 @@ module.exports = [
                     }
                 }
 
-                fs.writeJsonSync(dbPath, data);
+                saveData(data);
                 return reply(`✅ *Mention Updated!* (${data.urls.length} links saved as *${data.type}*)`);
             }
 
