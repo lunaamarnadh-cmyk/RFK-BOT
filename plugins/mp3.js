@@ -1,7 +1,7 @@
-
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
-const axios = require("axios");
-const FormData = require("form-data");
+const { exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
 
 module.exports = {
     pattern: "mp3",
@@ -23,42 +23,32 @@ module.exports = {
 
         const waitMsg = await sock.sendMessage(jid, { text: "⏳ *Converting video to MP3...*" }, { quoted: msg });
 
+        const id = Date.now();
+        const inputPath = path.join("/tmp", `in_${id}.mp4`);
+        const outputPath = path.join("/tmp", `out_${id}.mp3`);
+
         try {
             const stream = await downloadContentFromMessage(videoObj, "video");
             const chunks = [];
             for await (const chunk of stream) {
                 chunks.push(chunk);
             }
-            const buffer = Buffer.concat(chunks);
+            fs.writeFileSync(inputPath, Buffer.concat(chunks));
 
-            // Free online audio extraction fallback without local ffmpeg
-            const form = new FormData();
-            form.append("file", buffer, { filename: "video.mp4", contentType: "video/mp4" });
-            form.append("format", "mp3");
-
-            let mp3Buffer = null;
-
-            try {
-                const res = await axios.post("https://api.ryzendesu.vip/api/convert/mp4tomp3", form, {
-                    headers: form.getHeaders(),
-                    responseType: "arraybuffer",
-                    timeout: 30000
+            await new Promise((resolve, reject) => {
+                exec(`ffmpeg -y -i "${inputPath}" -vn -ar 44100 -ac 2 -b:a 192k "${outputPath}"`, (err) => {
+                    if (err) reject(err);
+                    else resolve();
                 });
-                if (res.data && res.data.byteLength > 1000) {
-                    mp3Buffer = Buffer.from(res.data);
-                }
-            } catch {}
+            });
 
-            // Direct M4A/MP3 audio container fallback if external API is busy
-            if (!mp3Buffer) {
-                mp3Buffer = buffer;
-            }
+            const mp3Buffer = fs.readFileSync(outputPath);
 
             await sock.sendMessage(
                 jid,
                 {
                     audio: mp3Buffer,
-                    mimetype: "audio/mp4",
+                    mimetype: "audio/mpeg",
                     ptt: false
                 },
                 { quoted: msg }
@@ -74,6 +64,9 @@ module.exports = {
                     edit: waitMsg.key
                 }
             );
+        } finally {
+            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
         }
     }
 };
