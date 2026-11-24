@@ -1,26 +1,33 @@
-const fs = require("fs-extra");
+const fs = require("fs");
 const path = require("path");
 const config = require("../config");
 
 const groupDbPath = path.join(__dirname, "group_settings.json");
 if (!fs.existsSync(groupDbPath)) {
-    fs.writeJsonSync(groupDbPath, {});
+    fs.writeFileSync(groupDbPath, JSON.stringify({}, null, 2));
 }
 
 function getGroupSettings(jid) {
-    const db = fs.readJsonSync(groupDbPath);
-    if (!db[jid]) {
-        db[jid] = { antilink: false, antibot: false };
-        fs.writeJsonSync(groupDbPath, db);
+    try {
+        const db = JSON.parse(fs.readFileSync(groupDbPath, "utf8"));
+        if (!db[jid]) {
+            db[jid] = { antilink: false, antibot: false };
+            fs.writeFileSync(groupDbPath, JSON.stringify(db, null, 2));
+        }
+        return db[jid];
+    } catch {
+        return { antilink: false, antibot: false };
     }
-    return db[jid];
 }
 
 function updateGroupSetting(jid, key, value) {
-    const db = fs.readJsonSync(groupDbPath);
+    let db = {};
+    try {
+        db = JSON.parse(fs.readFileSync(groupDbPath, "utf8"));
+    } catch {}
     if (!db[jid]) db[jid] = { antilink: false, antibot: false };
     db[jid][key] = value;
-    fs.writeJsonSync(groupDbPath, db);
+    fs.writeFileSync(groupDbPath, JSON.stringify(db, null, 2));
 }
 
 async function isGroupAdmin(sock, jid, userJid) {
@@ -46,7 +53,7 @@ module.exports = [
             if (!settings.antilink && !settings.antibot) return;
 
             // Skip Group Admins & Bot Owner
-            if (sender.includes(config.OWNER_NUMBER)) return;
+            if (config.OWNER_NUMBER && sender.includes(config.OWNER_NUMBER)) return;
             const senderIsAdmin = await isGroupAdmin(sock, jid, sender);
             if (senderIsAdmin) return;
 
@@ -94,7 +101,7 @@ module.exports = [
                 config.MODE = "private";
                 return reply("🔒 *RFK BOT ഇപ്പോൾ PRIVATE MODE ആണ്!* (ഓണർക്ക് മാത്രം ഉപയോഗിക്കാം)");
             }
-            return reply(`നിലവിലെ മോഡ്: *${config.MODE.toUpperCase()}*\nമാറ്റാൻ: \`.mode public\` അല്ലെങ്കിൽ \`.mode private\``);
+            return reply(`നിലവിലെ മോഡ്: *${(config.MODE || "private").toUpperCase()}*\nമാറ്റാൻ: \`.mode public\` അല്ലെങ്കിൽ \`.mode private\``);
         }
     },
 
