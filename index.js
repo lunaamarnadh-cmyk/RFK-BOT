@@ -1,3 +1,4 @@
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -58,14 +59,16 @@ function loadPlugins() {
 
 async function restoreSession() {
     const sessionEnv = process.env.SESSION_ID;
-    if (!fs.existsSync(SESSION_DIR)) {
-        fs.mkdirSync(SESSION_DIR, { recursive: true });
+    if (fs.existsSync(SESSION_DIR)) {
+        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
     }
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
         const base64Data = sessionEnv.replace("RFK-BOT~", "").trim();
         const credsBuffer = Buffer.from(base64Data, "base64");
         fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
-        console.log("✅ Session restored from SESSION_ID!");
+        console.log("✅ Session restored cleanly from SESSION_ID!");
     }
 }
 
@@ -97,9 +100,11 @@ async function startBot() {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }))
             },
-            browser: Browsers.ubuntu("Chrome"),
+            browser: Browsers.macOS("Desktop"),
             syncFullHistory: false,
-            markOnlineOnConnect: true
+            markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: false,
+            getMessage: async () => ({ conversation: "" })
         });
 
         sock.ev.on("creds.update", saveCreds);
@@ -109,7 +114,7 @@ async function startBot() {
 
             if (connection === "open") {
                 isConnecting = false;
-                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully!");
+                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully! User:", sock.user?.id);
             } else if (connection === "close") {
                 isConnecting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -128,81 +133,89 @@ async function startBot() {
             }
         });
 
-        sock.ev.on("messages.upsert", async ({ messages }) => {
-            const msg = messages[0];
-            if (!msg || !msg.message || !msg.key?.id) return;
+        sock.ev.on("messages.upsert", async (chatUpdate) => {
+            for (const msg of chatUpdate.messages || []) {
+                if (!msg || !msg.message || !msg.key?.id) continue;
 
-            if (processedMsgs.has(msg.key.id)) return;
-            processedMsgs.add(msg.key.id);
-            setTimeout(() => processedMsgs.delete(msg.key.id), 60000);
+                if (processedMsgs.has(msg.key.id)) continue;
+                processedMsgs.add(msg.key.id);
+                setTimeout(() => processedMsgs.delete(msg.key.id), 60000);
 
-            const jid = msg.key.remoteJid;
-            if (!jid || jid === "status@broadcast") return;
+                const jid = msg.key.remoteJid;
+                if (!jid || jid === "status@broadcast") continue;
 
-            const fromMe = Boolean(msg.key.fromMe);
-            const sender = jid.endsWith("@g.us")
-                ? (msg.key.participant || jid)
-                : (fromMe ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid);
+                const fromMe = Boolean(msg.key.fromMe);
+                const sender = jid.endsWith("@g.us")
+                    ? (msg.key.participant || jid)
+                    : (fromMe ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid);
 
-            const senderNum = sender.split("@")[0].split(":")[0];
-            const botNum = sock.user.id.split(":")[0];
-            const botLid = (sock.user.lid || "").split("@")[0].split(":")[0];
-            const isOwner =
-                fromMe ||
-                senderNum === botNum ||
-                (botLid && senderNum === botLid) ||
-                (OWNER_NUMBER && senderNum === OWNER_NUMBER);
+                const senderNum = sender.split("@")[0].split(":")[0];
+                const botNum = sock.user.id.split(":")[0];
+                const botLid = (sock.user.lid || "").split("@")[0].split(":")[0];
+                const isOwner =
+                    fromMe ||
+                    senderNum === botNum ||
+                    (botLid && senderNum === botLid) ||
+                    (OWNER_NUMBER && senderNum === OWNER_NUMBER);
 
-            const m = msg.message?.ephemeralMessage?.message || msg.message?.viewOnceMessage?.message || msg.message;
-            const body =
-                m.conversation ||
-                m.extendedTextMessage?.text ||
-                m.imageMessage?.caption ||
-                m.videoMessage?.caption ||
-                "";
+                const m =
+                    msg.message?.ephemeralMessage?.message ||
+                    msg.message?.viewOnceMessage?.message ||
+                    msg.message?.documentWithCaptionMessage?.message ||
+                    msg.message;
 
-            const pushname = msg.pushName || "User";
-            const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
+                const body =
+                    m?.conversation ||
+                    m?.extendedTextMessage?.text ||
+                    m?.imageMessage?.caption ||
+                    m?.videoMessage?.caption ||
+                    "";
 
-            for (const evPlugin of eventPlugins) {
-                try {
-                    await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
-                } catch (e) {
-                    console.error("Event plugin error:", e.message);
+                if (body) {
+                    console.log(`💬 [${chatUpdate.type}] ${jid} | fromMe:${fromMe} | text: ${body}`);
                 }
-            }
 
-            if (!body.startsWith(PREFIX)) return;
-            console.log(`📩 Command received: ${body} | fromMe: ${fromMe} | isOwner: ${isOwner}`);
+                const pushname = msg.pushName || "User";
+                const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
 
-            if (MODE === "private" && !isOwner) return;
+                for (const evPlugin of eventPlugins) {
+                    try {
+                        await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
+                    } catch (e) {
+                        console.error("Event plugin error:", e.message);
+                    }
+                }
 
-            const args = body.slice(PREFIX.length).trim().split(/\s+/);
-            const cmdName = (args.shift() || "").toLowerCase();
-            const text = args.join(" ");
+                if (!body.startsWith(PREFIX)) continue;
+                if (MODE === "private" && !isOwner) continue;
 
-            const cmd = commands.get(cmdName);
-            if (!cmd) return;
+                const args = body.slice(PREFIX.length).trim().split(/\s+/);
+                const cmdName = (args.shift() || "").toLowerCase();
+                const text = args.join(" ");
 
-            try {
-                await cmd.execute({
-                    sock,
-                    msg,
-                    jid,
-                    sender,
-                    fromMe,
-                    isOwner,
-                    args,
-                    text,
-                    body,
-                    pushname,
-                    reply,
-                    commands,
-                    uptime: formatUptime(Date.now() - startTime)
-                });
-            } catch (err) {
-                console.error(`Command error (${cmdName}):`, err);
-                await reply(`❌ Error: ${err.message}`);
+                const cmd = commands.get(cmdName);
+                if (!cmd) continue;
+
+                try {
+                    await cmd.execute({
+                        sock,
+                        msg,
+                        jid,
+                        sender,
+                        fromMe,
+                        isOwner,
+                        args,
+                        text,
+                        body,
+                        pushname,
+                        reply,
+                        commands,
+                        uptime: formatUptime(Date.now() - startTime)
+                    });
+                } catch (err) {
+                    console.error(`Command error (${cmdName}):`, err);
+                    await reply(`❌ Error: ${err.message}`);
+                }
             }
         });
     } catch (err) {
