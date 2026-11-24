@@ -1,4 +1,8 @@
-const ALIVE_IMAGE = process.env.ALIVE_IMG || "https://files.catbox.moe/YOUR_IMAGE.jpg";
+const fs = require("fs-extra");
+const path = require("path");
+
+const imgPath = path.join(__dirname, "../bot_photo.jpg");
+const ALIVE_IMAGE = process.env.ALIVE_IMG || "";
 
 module.exports = {
     pattern: "alive",
@@ -15,11 +19,13 @@ module.exports = {
             `📋 കമാൻഡുകൾ കാണാൻ *\`.menu\`* അയക്കുക.`;
 
         try {
-            await sock.sendMessage(
-                jid,
-                { image: { url: ALIVE_IMAGE }, caption },
-                { quoted: msg }
-            );
+            if (fs.existsSync(imgPath)) {
+                await sock.sendMessage(jid, { image: fs.readFileSync(imgPath), caption }, { quoted: msg });
+            } else if (ALIVE_IMAGE) {
+                await sock.sendMessage(jid, { image: { url: ALIVE_IMAGE }, caption }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: caption }, { quoted: msg });
+            }
         } catch {
             await sock.sendMessage(jid, { text: caption }, { quoted: msg });
         }
