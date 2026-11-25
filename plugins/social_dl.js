@@ -17,6 +17,23 @@ async function fetchBuffer(url) {
     return Buffer.from(res.data);
 }
 
+// Resolve /share/reel/... links to actual /reel/... URL
+async function resolveInstaUrl(url) {
+    if (url.includes("/share/")) {
+        try {
+            const res = await axios.get(url, {
+                headers: { "User-Agent": UA },
+                maxRedirects: 5,
+                timeout: 15000
+            });
+            return res.request?.res?.responseUrl || url;
+        } catch (e) {
+            return e.request?.res?.responseUrl || url;
+        }
+    }
+    return url;
+}
+
 function extractShortcode(url) {
     const clean = url.split("?")[0].replace(/\/$/, "");
     const match = clean.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
@@ -32,7 +49,6 @@ function shortcodeToMediaId(shortcode) {
     return mediaId.toString();
 }
 
-// Check if a video buffer actually has an audio stream using ffprobe/ffmpeg
 async function hasAudioTrack(buffer) {
     const tempFile = path.join("/tmp", `chk_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
     try {
@@ -61,7 +77,6 @@ function extractAudioFromDash(manifest) {
             if (urlMatch?.[1]) return urlMatch[1].trim();
         }
     }
-    // Fallback: Look for any mp4a / audio URL inside manifest
     const mp4aMatch = xml.match(/https?:\/\/[^"<\s]+(?:mp4a|audio)[^"<\s]*/i);
     return mp4aMatch ? mp4aMatch[0].trim() : null;
 }
@@ -86,15 +101,17 @@ async function mergeVideoAudio(videoUrl, audioUrl) {
     }
 }
 
-async function getInstaMedia(url) {
+async function getInstaMedia(rawUrl) {
+    const url = await resolveInstaUrl(rawUrl);
     const shortcode = extractShortcode(url);
-    if (!shortcode) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
+    if (!shortcode) throw new Error(`Instagram ലിങ്ക് വായിക്കാൻ കഴിഞ്ഞില്ല (${url})`);
 
     const rawCookie = (process.env.IG_COOKIE || "sessionid=51476036011%3AMYbtaqpKPGa9Zs%3A2%3AAYmIznW-I_7-zSt6MZwN49aWQEjDmHLnQZa4zMx6vg;").trim();
     const cookieHeader = rawCookie.includes("sessionid=") ? rawCookie : `sessionid=${rawCookie};`;
     const mediaId = shortcodeToMediaId(shortcode);
+    const errors = [];
 
-    // 1. Mobile API (Checks all video_versions for audio + DASH merge)
+    // 1. Mobile API
     try {
         const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
             headers: {
@@ -109,7 +126,6 @@ async function getInstaMedia(url) {
             const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
 
             if (mediaObj.video_versions?.length > 0) {
-                // Step A: Try extracting separate audio & merging first (Highest Quality)
                 let audioUrl = mediaObj.audio_versions?.[0]?.url ||
                                extractAudioFromDash(mediaObj.video_dash_manifest) ||
                                item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
@@ -121,7 +137,6 @@ async function getInstaMedia(url) {
                     return { type: "video", buffer, source: "Mobile API (Merged Audio)" };
                 }
 
-                // Step B: Loop through all video_versions to find one that ALREADY includes audio!
                 let firstBuffer = null;
                 for (let i = 0; i < mediaObj.video_versions.length; i++) {
                     const vUrl = mediaObj.video_versions[i].url;
@@ -134,7 +149,7 @@ async function getInstaMedia(url) {
                 }
 
                 if (firstBuffer) {
-                    return { type: "video", buffer: firstBuffer, source: "Mobile API (Silent/No Audio in Reel)" };
+                    return { type: "video", buffer: firstBuffer, source: "Mobile API (No Audio)" };
                 }
             }
 
@@ -142,9 +157,11 @@ async function getInstaMedia(url) {
                 const buffer = await fetchBuffer(mediaObj.image_versions2.candidates[0].url);
                 return { type: "image", buffer, source: "Mobile API Image" };
             }
+        } else {
+            errors.push(`MobileAPI: ${res.data?.message || "Empty items"}`);
         }
     } catch (e) {
-        console.error("Mobile API error:", e.message);
+        errors.push(`MobileAPI: ${e.response?.data?.message || e.response?.status || e.message}`);
     }
 
     // 2. Embed Page Fallback
@@ -160,9 +177,12 @@ async function getInstaMedia(url) {
             const buffer = await fetchBuffer(cleanUrl);
             return { type: "video", buffer, source: "Embed Fallback" };
         }
-    } catch {}
+        errors.push("Embed: No video_url");
+    } catch (e) {
+        errors.push(`Embed: ${e.message}`);
+    }
 
-    throw new Error("Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല.");
+    throw new Error(`Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല.\n(${errors.join(" | ")})`);
 }
 
 async function getFbMedia(url) {
