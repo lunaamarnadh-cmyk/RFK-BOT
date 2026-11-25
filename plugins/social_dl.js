@@ -31,7 +31,7 @@ async function getInstaMedia(url) {
     const shortcode = extractShortcode(url);
     if (!shortcode) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    const cookie = (process.env.IG_COOKIE || "").trim();
+    const cookie = (process.env.IG_COOKIE || "sessionid=51476036011%3AMYbtaqpKPGa9Zs%3A2%3AAYmIznW-I_7-zSt6MZwN49aWQEjDmHLnQZa4zMx6vg;").trim();
     const mediaId = shortcodeToMediaId(shortcode);
 
     if (cookie) {
