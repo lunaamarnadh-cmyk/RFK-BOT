@@ -6,7 +6,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 async function fetchBuffer(url) {
     const res = await axios.get(url, {
         responseType: "arraybuffer",
-        headers: { "User-Agent": UA, "Accept": "*/*" },
+        headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" },
         timeout: 30000
     });
     return Buffer.from(res.data);
@@ -16,7 +16,7 @@ async function resolveInstaUrl(url) {
     if (url.includes("/share/")) {
         try {
             const res = await axios.get(url, {
-                headers: { "User-Agent": UA },
+                headers: { "User-Agent": "Mozilla/5.0" },
                 maxRedirects: 5,
                 timeout: 15000
             });
@@ -28,110 +28,66 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
-// 1. SaveIG with dynamic k_token extraction (Returns full MP4 with Audio)
-async function trySaveIgWithToken(url) {
-    try {
-        const home = await axios.get("https://saveig.app/en", {
-            headers: { "User-Agent": UA },
-            timeout: 10000
-        });
-        const htmlHome = home.data || "";
-        const kExp = htmlHome.match(/k_exp\s*=\s*"([^"]+)"/)?.[1] || "";
-        const kToken = htmlHome.match(/k_token\s*=\s*"([^"]+)"/)?.[1] || "";
-
-        const payload = new URLSearchParams({
-            q: url,
-            t: "media",
-            lang: "en",
-            ...(kExp && { k_exp: kExp }),
-            ...(kToken && { k_token: kToken })
-        }).toString();
-
-        const res = await axios.post("https://v3.saveig.app/api/ajaxSearch", payload, {
-            headers: {
-                "User-Agent": UA,
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Origin": "https://saveig.app",
-                "Referer": "https://saveig.app/en",
-                "X-Requested-With": "XMLHttpRequest"
-            },
-            timeout: 15000
-        });
-
-        const html = res.data?.data || "";
-        const vidMatch = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Video"/i) ||
-                         html.match(/href="(https:\/\/d\.rapidcdn\.app[^"]+)"/i);
-        if (vidMatch?.[1]) {
-            return { type: "video", url: vidMatch[1].replace(/&amp;/g, "&") };
-        }
-        const imgMatch = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Image"/i);
-        if (imgMatch?.[1]) {
-            return { type: "image", url: imgMatch[1].replace(/&amp;/g, "&") };
-        }
-    } catch {}
-    return null;
-}
-
-// 2. Working WhatsApp Bot REST APIs (BK9, Ryzendesu, Vreden, DavidCyril, IronMan)
-async function tryBotRestApis(url) {
-    const encoded = encodeURIComponent(url);
-    const apis = [
-        `https://bk9.fun/download/instagram?url=${encoded}`,
-        `https://api.ryzendesu.vip/api/downloader/igdl?url=${encoded}`,
-        `https://api.vreden.my.id/api/igdownload?url=${encoded}`,
-        `https://apis.davidcyriltech.my.id/instagram?url=${encoded}`,
-        `https://ironman.koyeb.app/ironman/dl/ig?url=${encoded}`
-    ];
-
-    for (const apiUrl of apis) {
-        try {
-            const { data } = await axios.get(apiUrl, {
-                headers: { "User-Agent": UA },
-                timeout: 15000
-            });
-
-            // Handle various response structures
-            const candidates = [
-                data?.BK9,
-                data?.result?.data,
-                data?.result,
-                data?.data,
-                data?.media,
-                Array.isArray(data) ? data : null
-            ].filter(Boolean);
-
-            for (const item of candidates) {
-                if (Array.isArray(item) && item.length > 0) {
-                    const first = item[0];
-                    const mediaUrl = first?.url || first?.download_url || first?.video || first?.link || (typeof first === "string" ? first : null);
-                    if (mediaUrl && mediaUrl.startsWith("http")) {
-                        const isImg = first?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
-                        return { type: isImg ? "image" : "video", url: mediaUrl };
-                    }
-                } else if (typeof item === "object") {
-                    const mediaUrl = item?.url || item?.download_url || item?.video || item?.videoUrl || item?.link;
-                    if (mediaUrl && mediaUrl.startsWith("http")) {
-                        return { type: "video", url: mediaUrl };
-                    }
-                }
-            }
-        } catch {}
-    }
-    return null;
-}
-
+// Exact Jarvis-MD Instagram Downloader Logic (igexport.com)
 async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    const result = (await tryBotRestApis(url)) || (await trySaveIgWithToken(url));
+    const isReel = /\/(reel|reels|tv)\//i.test(url);
+    const endpoints = isReel
+        ? [
+              `https://igexport.com/api/ig-reels/?url=${encodeURIComponent(url)}`,
+              `https://igexport.com/api/ig-downloader/?url=${encodeURIComponent(url)}`
+          ]
+        : [
+              `https://igexport.com/api/ig-downloader/?url=${encodeURIComponent(url)}`,
+              `https://igexport.com/api/ig-reels/?url=${encodeURIComponent(url)}`
+          ];
 
-    if (!result || !result.url) {
-        throw new Error("API-കളിൽ നിന്ന് വീഡിയോ ലഭിച്ചില്ല. അൽപസമയത്തിന് ശേഷം വീണ്ടും ശ്രമിക്കുക.");
+    for (const apiUrl of endpoints) {
+        try {
+            const { data } = await axios.get(apiUrl, {
+                headers: {
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json",
+                    "Referer": "https://igexport.com/id/video-download/"
+                },
+                timeout: 20000
+            });
+
+            const results = [];
+
+            // Format 1: data.items array (Carousel / Multiple posts / Reels)
+            if (Array.isArray(data?.data?.items) && data.data.items.length > 0) {
+                for (const item of data.data.items) {
+                    const mediaUrl = item?.videoUrl || item?.url || item?.imageUrl;
+                    if (mediaUrl) {
+                        const isImg = !item?.videoUrl && (item?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl));
+                        results.push({ type: isImg ? "image" : "video", url: mediaUrl });
+                    }
+                }
+            }
+            // Format 2: Single data.videoUrl
+            else if (data?.data?.videoUrl) {
+                results.push({ type: "video", url: data.data.videoUrl });
+            }
+            // Format 3: Single data.imageUrl
+            else if (data?.data?.imageUrl) {
+                results.push({ type: "image", url: data.data.imageUrl });
+            }
+
+            if (results.length > 0) {
+                const downloaded = [];
+                for (const item of results) {
+                    const buffer = await fetchBuffer(item.url);
+                    downloaded.push({ type: item.type, buffer });
+                }
+                return downloaded;
+            }
+        } catch {}
     }
 
-    const buffer = await fetchBuffer(result.url);
-    return { type: result.type, buffer };
+    throw new Error("Instagram API-യിൽ നിന്ന് മീഡിയ ലഭിച്ചില്ല (ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പാക്കുക).");
 }
 
 async function getFbMedia(url) {
@@ -163,13 +119,15 @@ module.exports = [
                 return reply("❌ *ദയവായി ഒരു ശരിയായ Instagram ലിങ്ക് നൽകുക!*\nഉദാഹരണം: `.insta https://www.instagram.com/reel/...`");
             }
             try {
-                await reply("⏳ *Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const media = await getInstaMedia(url);
+                await reply("⏳ *Instagram മീഡിയ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
+                const items = await getInstaMedia(url);
 
-                if (media.type === "image") {
-                    await sock.sendMessage(jid, { image: media.buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(jid, { video: media.buffer, mimetype: "video/mp4", caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                for (const media of items) {
+                    if (media.type === "image") {
+                        await sock.sendMessage(jid, { image: media.buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { video: media.buffer, mimetype: "video/mp4", caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                    }
                 }
             } catch (err) {
                 await reply(`❌ *Insta Error:* ${err.message}`);
