@@ -10,7 +10,6 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const YTDLP_PATH = "/tmp/yt-dlp";
 const COOKIE_FILE = "/tmp/ig_cookies.txt";
 
-// Fresh sessionid configured
 const DEFAULT_SESSION_ID = "51476036011%3Ata0MM4GaNSuNAl%3A27%3AAYlcHJUN1WdLpQmL8X1df5-iarxrZZhgmqu42Jt6hg";
 
 async function fetchBuffer(url) {
@@ -63,6 +62,22 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
+// Re-encode to WhatsApp-compatible H.264 + AAC MP4
+async function makeWhatsAppCompatible(inputPath) {
+    const fixedPath = inputPath.replace(/\.mp4$/, "_wa.mp4");
+    try {
+        await execPromise(
+            `ffmpeg -y -i "${inputPath}" -c:v libx264 -preset ultrafast -crf 24 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "${fixedPath}"`,
+            { timeout: 60000 }
+        );
+        const buf = fs.readFileSync(fixedPath);
+        return buf;
+    } finally {
+        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+        if (fs.existsSync(fixedPath)) fs.unlinkSync(fixedPath);
+    }
+}
+
 async function runYtDlp(url, useCookies = true) {
     const ytdlp = await ensureYtDlp();
     const cookies = useCookies ? writeCookieFile() : null;
@@ -71,24 +86,28 @@ async function runYtDlp(url, useCookies = true) {
     const expectedMp4 = outTemplate.replace("%(ext)s", "mp4");
 
     const cookieFlag = cookies ? `--cookies "${cookies}"` : "";
-    const cmd = `"${ytdlp}" ${cookieFlag} -f "bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
+    // Prefer H.264 (avc1) + m4a first, fallback to best video+audio
+    const cmd = `"${ytdlp}" ${cookieFlag} -f "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
 
     await execPromise(cmd, { timeout: 60000 });
 
     if (fs.existsSync(expectedMp4)) {
-        const buf = fs.readFileSync(expectedMp4);
-        fs.unlinkSync(expectedMp4);
-        return { type: "video", buffer: buf, source: cookies ? "yt-dlp (Cookie + Audio)" : "yt-dlp (Public + Audio)" };
+        const buf = await makeWhatsAppCompatible(expectedMp4);
+        return { type: "video", buffer: buf, source: cookies ? "yt-dlp (H.264 + Audio)" : "yt-dlp (Public + Audio)" };
     }
 
     const basePrefix = `ig_${id}.`;
     const files = fs.readdirSync("/tmp").filter(f => f.startsWith(basePrefix));
     if (files.length > 0) {
         const fullPath = path.join("/tmp", files[0]);
-        const buf = fs.readFileSync(fullPath);
         const isImg = /\.(jpg|jpeg|png|webp)$/i.test(files[0]);
-        fs.unlinkSync(fullPath);
-        return { type: isImg ? "image" : "video", buffer: buf, source: "yt-dlp" };
+        if (isImg) {
+            const buf = fs.readFileSync(fullPath);
+            fs.unlinkSync(fullPath);
+            return { type: "image", buffer: buf, source: "yt-dlp" };
+        }
+        const buf = await makeWhatsAppCompatible(fullPath);
+        return { type: "video", buffer: buf, source: "yt-dlp (H.264 + Audio)" };
     }
     throw new Error("Output file not created");
 }
@@ -97,11 +116,9 @@ async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    // 1. Try yt-dlp WITH cookies
     try {
         return await runYtDlp(url, true);
     } catch (err1) {
-        // 2. If 401 Unauthorized (cookie expired), retry WITHOUT cookies for public reels
         try {
             return await runYtDlp(url, false);
         } catch (err2) {
@@ -148,7 +165,7 @@ module.exports = [
                 if (media.type === "image") {
                     await sock.sendMessage(jid, { image: media.buffer, caption: `✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*\n_Source: ${media.source}_` }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, { video: media.buffer, caption: `✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*\n_Source: ${media.source}_` }, { quoted: msg });
+                    await sock.sendMessage(jid, { video: media.buffer, mimetype: "video/mp4", caption: `✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*\n_Source: ${media.source}_` }, { quoted: msg });
                 }
             } catch (err) {
                 await reply(`❌ *Insta Error:* ${err.message.slice(0, 300)}`);
@@ -168,7 +185,7 @@ module.exports = [
                 await reply("⏳ *Facebook വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
                 const mediaUrl = await getFbMedia(url);
                 const buffer = await fetchBuffer(mediaUrl);
-                await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                await sock.sendMessage(jid, { video: buffer, mimetype: "video/mp4", caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
             } catch (err) {
                 await reply(`❌ *FB Error:* ${err.message}`);
             }
