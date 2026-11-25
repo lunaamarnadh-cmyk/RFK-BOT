@@ -67,7 +67,7 @@ async function restoreSession() {
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
         const rawData = sessionEnv.replace("RFK-BOT~", "").trim();
 
-        // 1. Short Session ID (e.g., RFK-BOT~ABCD1234)
+        // 1. Short Session ID
         if (rawData.length < 25) {
             try {
                 let credsContent;
@@ -94,6 +94,7 @@ async function restoreSession() {
 }
 
 let isConnecting = false;
+let botConnectTime = Math.floor(Date.now() / 1000);
 const startTime = Date.now();
 const processedMsgs = new Set();
 
@@ -135,6 +136,7 @@ async function startBot() {
 
             if (connection === "open") {
                 isConnecting = false;
+                botConnectTime = Math.floor(Date.now() / 1000);
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully! User:", sock.user?.id);
             } else if (connection === "close") {
                 isConnecting = false;
@@ -154,19 +156,18 @@ async function startBot() {
         });
 
         sock.ev.on("messages.upsert", async (chatUpdate) => {
-            // പഴയ ഹിസ്റ്ററി മെസ്സേജുകൾ (append) ഒഴിവാക്കി പുതിയ ലൈവ് മെസ്സേജുകൾ (notify) മാത്രം എടുക്കാൻ
             if (chatUpdate.type !== "notify") return;
 
             for (const msg of chatUpdate.messages || []) {
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
-                // 2 മിനിറ്റിൽ കൂടുതൽ പഴക്കമുള്ള മെസ്സേജുകൾ ഒഴിവാക്കാൻ (Restart loop തടയാൻ)
+                // ബോട്ട് ഓൺലൈൻ ആകുന്നതിന് മുമ്പുള്ള പഴയ മെസ്സേജുകൾ പൂർണ്ണമായും ഒഴിവാക്കാൻ
                 const msgTime = Number(msg.messageTimestamp || 0);
-                if (msgTime && Math.floor(Date.now() / 1000) - msgTime > 120) continue;
+                if (msgTime && msgTime < botConnectTime - 5) continue;
 
                 if (processedMsgs.has(msg.key.id)) continue;
                 processedMsgs.add(msg.key.id);
-                setTimeout(() => processedMsgs.delete(msg.key.id), 300000);
+                setTimeout(() => processedMsgs.delete(msg.key.id), 600000);
 
                 const jid = msg.key.remoteJid;
                 if (!jid) continue;
@@ -225,14 +226,11 @@ async function startBot() {
                     }
                 }
 
-                // Prefix-less + Prefix Support
+                // പ്രിഫിക്സ് (.) ഉള്ള കമാൻഡുകൾക്ക് മാത്രം മറുപടി നൽകാൻ
                 const trimmed = body.trim();
-                if (!trimmed) continue;
+                if (!trimmed || !trimmed.startsWith(PREFIX)) continue;
 
-                const cleanBody = trimmed.startsWith(PREFIX)
-                    ? trimmed.slice(PREFIX.length).trim()
-                    : trimmed;
-
+                const cleanBody = trimmed.slice(PREFIX.length).trim();
                 const args = cleanBody.split(/\s+/);
                 const cmdName = (args.shift() || "").toLowerCase();
                 const cmd = commands.get(cmdName);
