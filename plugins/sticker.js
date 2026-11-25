@@ -1,75 +1,66 @@
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
 const { Sticker, StickerTypes } = require("wa-sticker-formatter");
 
-const PACK_NAME = "乂𝐑𝐅𝐊 𝐁𝐎𝐓乂";
-const AUTHOR_NAME = "𝐑𝐅𝐊 𝐌𝐎𝐃𝐒";
+try {
+    process.env.FFMPEG_PATH = require("ffmpeg-static");
+} catch {}
 
-async function downloadMedia(mediaObj, mediaType) {
-    const stream = await downloadContentFromMessage(mediaObj, mediaType);
+async function downloadMedia(msgContent, type) {
+    const stream = await downloadContentFromMessage(msgContent, type);
     const chunks = [];
-    for await (const chunk of stream) {
-        chunks.push(chunk);
-    }
+    for await (const chunk of stream) chunks.push(chunk);
     return Buffer.concat(chunks);
 }
 
-module.exports = {
-    pattern: "sticker",
-    alias: ["s", "st", "take", "wm"],
-    type: "converter",
-    async execute({ sock, msg, jid, text, reply }) {
-        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        const targetMsg = quoted || msg.message;
+module.exports = [
+    {
+        pattern: "sticker",
+        alias: ["s", "stiker"],
+        type: "converter",
+        async execute({ sock, msg, jid, reply }) {
+            const m =
+                msg.message?.ephemeralMessage?.message ||
+                msg.message?.viewOnceMessage?.message ||
+                msg.message;
 
-        const m =
-            targetMsg?.ephemeralMessage?.message ||
-            targetMsg?.viewOnceMessage?.message ||
-            targetMsg;
+            const quoted = m?.extendedTextMessage?.contextInfo?.quotedMessage;
+            const target =
+                quoted?.ephemeralMessage?.message ||
+                quoted?.viewOnceMessage?.message ||
+                quoted ||
+                m;
 
-        let mediaType = null;
-        let mediaObj = null;
+            const isImage = Boolean(target?.imageMessage);
+            const isVideo = Boolean(target?.videoMessage);
 
-        if (m?.imageMessage) {
-            mediaType = "image";
-            mediaObj = m.imageMessage;
-        } else if (m?.videoMessage) {
-            mediaType = "video";
-            mediaObj = m.videoMessage;
-        } else if (m?.stickerMessage) {
-            mediaType = "sticker";
-            mediaObj = m.stickerMessage;
-        }
-
-        if (!mediaType || !mediaObj) {
-            return reply("❌ *ഏതെങ്കിലും ഫോട്ടോയ്ക്കോ, വീഡിയോയ്ക്കോ, സ്റ്റിക്കറിനോ റിപ്ലൈ ആയി `sticker` അല്ലെങ്കിൽ `s` എന്ന് അയക്കുക!*");
-        }
-
-        try {
-            const buffer = await downloadMedia(mediaObj, mediaType);
-
-            // Custom pack|author if provided (e.g., take MyPack|MyName)
-            let pack = PACK_NAME;
-            let author = AUTHOR_NAME;
-            if (text && text.includes("|")) {
-                const parts = text.split("|");
-                pack = parts[0].trim() || PACK_NAME;
-                author = parts[1].trim() || AUTHOR_NAME;
-            } else if (text && text.trim()) {
-                pack = text.trim();
+            if (!isImage && !isVideo) {
+                return reply("❌ *ഏതെങ്കിലും ഒരു ഫോട്ടോയ്‌ക്കോ വീഡിയോയ്ക്കോ Reply ആയി `.sticker` എന്ന് അയക്കുക!*");
             }
 
-            const sticker = new Sticker(buffer, {
-                pack,
-                author,
-                type: StickerTypes.FULL,
-                quality: 70
-            });
+            try {
+                const buffer = await downloadMedia(
+                    isImage ? target.imageMessage : target.videoMessage,
+                    isImage ? "image" : "video"
+                );
 
-            const stickerBuffer = await sticker.toBuffer();
-            await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
-        } catch (err) {
-            console.error("Sticker error:", err.message);
-            await reply(`❌ *Sticker Error:* ${err.message}`);
+                const sticker = new Sticker(buffer, {
+                    pack: "乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂",
+                    author: "𝐑𝐅𝐊 𝐌𝐎𝐃𝐒",
+                    type: StickerTypes.FULL,
+                    quality: 50
+                });
+
+                const stickerBuffer = await sticker.toBuffer();
+
+                await sock.sendMessage(
+                    jid,
+                    { sticker: stickerBuffer },
+                    { quoted: msg }
+                );
+            } catch (err) {
+                console.error("Sticker Error:", err.message);
+                await reply(`❌ *വീഡിയോ സ്റ്റിക്കർ Error:* ${err.message}`);
+            }
         }
     }
-};
+];
