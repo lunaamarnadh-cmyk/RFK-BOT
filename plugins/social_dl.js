@@ -1,4 +1,3 @@
-
 const axios = require("axios");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
@@ -12,14 +11,12 @@ async function fetchBuffer(url) {
     return Buffer.from(res.data);
 }
 
-// Extract Instagram Shortcode from any link (/reel/, /reels/, /p/, /tv/)
 function extractShortcode(url) {
     const clean = url.split("?")[0].replace(/\/$/, "");
     const match = clean.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
     return match ? match[2] : null;
 }
 
-// Convert Instagram Shortcode to Media ID
 function shortcodeToMediaId(shortcode) {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mediaId = BigInt(0);
@@ -29,76 +26,70 @@ function shortcodeToMediaId(shortcode) {
     return mediaId.toString();
 }
 
-// 1. Official Instagram Private/Web API using IG_COOKIE (100% Working on Render/Railway)
-async function fetchInstaWithCookie(url) {
+// Primary: Instagram API using IG_COOKIE (100% Reliable)
+async function getInstaMedia(url) {
     const shortcode = extractShortcode(url);
-    if (!shortcode) throw new Error("ലിങ്ക് ശരിയല്ല.");
+    if (!shortcode) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    const cookie = process.env.IG_COOKIE || "";
+    const cookie = (process.env.IG_COOKIE || "").trim();
     const mediaId = shortcodeToMediaId(shortcode);
 
-    // Endpoint 1: Instagram Mobile Info API
-    try {
-        const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
-            headers: {
-                "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; samsung; SM-G991B; o1s; exynos2100; en_US; 458229258)",
-                "X-IG-App-ID": "936619743392459",
-                "Cookie": cookie
-            },
-            timeout: 15000
-        });
-
-        const item = res.data?.items?.[0];
-        if (item) {
-            if (item.video_versions?.length > 0) return item.video_versions[0].url;
-            if (item.carousel_media?.[0]?.video_versions?.length > 0) return item.carousel_media[0].video_versions[0].url;
-            if (item.carousel_media?.[0]?.image_versions2?.candidates?.length > 0) return item.carousel_media[0].image_versions2.candidates[0].url;
-            if (item.image_versions2?.candidates?.length > 0) return item.image_versions2.candidates[0].url;
+    if (cookie) {
+        try {
+            const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
+                headers: {
+                    "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; samsung; SM-G991B; o1s; exynos2100; en_US; 458229258)",
+                    "X-IG-App-ID": "936619743392459",
+                    "Cookie": cookie.includes("sessionid=") ? cookie : `sessionid=${cookie};`
+                },
+                timeout: 15000
+            });
+            const item = res.data?.items?.[0];
+            if (item) {
+                if (item.video_versions?.length > 0) return item.video_versions[0].url;
+                if (item.carousel_media?.[0]?.video_versions?.length > 0) return item.carousel_media[0].video_versions[0].url;
+                if (item.image_versions2?.candidates?.length > 0) return item.image_versions2.candidates[0].url;
+            }
+        } catch (e) {
+            console.error("Cookie API error:", e.message);
         }
-    } catch {}
-
-    // Endpoint 2: GraphQL Web Info API
-    const res2 = await axios.get(`https://www.instagram.com/api/v1/media/${mediaId}/info/`, {
-        headers: {
-            "User-Agent": UA,
-            "X-IG-App-ID": "936619743392459",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": `https://www.instagram.com/reel/${shortcode}/`,
-            "Cookie": cookie
-        },
-        timeout: 15000
-    });
-
-    const item2 = res2.data?.items?.[0];
-    if (item2) {
-        if (item2.video_versions?.length > 0) return item2.video_versions[0].url;
-        if (item2.image_versions2?.candidates?.length > 0) return item2.image_versions2.candidates[0].url;
     }
 
-    throw new Error("IG_COOKIE സെറ്റ് ചെയ്യാത്തതുകൊണ്ടോ കാലാവധി കഴിഞ്ഞതുകൊണ്ടോ ആണ് Instagram ബ്ലോക്ക് ചെയ്യുന്നത്.");
+    // Fallback: Direct Embed Page Regex
+    try {
+        const embedRes = await axios.get(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
+            headers: { "User-Agent": UA },
+            timeout: 15000
+        });
+        const html = embedRes.data || "";
+        const vMatch = html.match(/"video_url":"([^"]+)"/);
+        if (vMatch?.[1]) return vMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "");
+    } catch {}
+
+    throw new Error(
+        cookie
+            ? "IG_COOKIE കാലാവധി കഴിഞ്ഞു. പുതിയ sessionid അപ്‌ഡേറ്റ് ചെയ്യുക."
+            : "Render/Railway-യിൽ IG_COOKIE സെറ്റ് ചെയ്തിട്ടില്ല! sessionid ചേർക്കുക."
+    );
 }
 
-// 2. Facebook Direct HTML Meta / Graph Scraper (No external API needed)
-async function fetchFbDirect(url) {
+// Facebook Direct Scraper
+async function getFbMedia(url) {
     const res = await axios.get(url, {
         headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Sec-Fetch-Site": "none"
         },
         timeout: 15000
     });
-
     const html = res.data || "";
-    const hdMatch = html.match(/"browser_native_hd_url":"([^"]+)"/) || html.match(/hd_src:"([^"]+)"/);
-    const sdMatch = html.match(/"browser_native_sd_url":"([^"]+)"/) || html.match(/sd_src:"([^"]+)"/);
-
-    const rawUrl = (hdMatch && hdMatch[1]) || (sdMatch && sdMatch[1]);
-    if (rawUrl) {
-        return rawUrl.replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/\\/g, "");
-    }
-    throw new Error("Facebook വീഡിയോ ലിങ്ക് ലഭിച്ചില്ല. വീഡിയോ പബ്ലിക് ആണെന്ന് ഉറപ്പുവരുത്തുക.");
+    const hd = html.match(/"browser_native_hd_url":"([^"]+)"/) || html.match(/hd_src:"([^"]+)"/);
+    const sd = html.match(/"browser_native_sd_url":"([^"]+)"/) || html.match(/sd_src:"([^"]+)"/);
+    const raw = hd?.[1] || sd?.[1];
+    if (raw) return raw.replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/\\/g, "");
+    throw new Error("Facebook വീഡിയോ ലിങ്ക് ലഭിച്ചില്ല (ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പാക്കുക).");
 }
 
 module.exports = [
@@ -111,20 +102,19 @@ module.exports = [
             if (!url || !url.includes("instagram.com")) {
                 return reply("❌ *ദയവായി ഒരു ശരിയായ Instagram ലിങ്ക് നൽകുക!*\nഉദാഹരണം: `.insta https://www.instagram.com/reel/...`");
             }
-
             try {
                 await reply("⏳ *Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await fetchInstaWithCookie(url);
+                const mediaUrl = await getInstaMedia(url);
                 const buffer = await fetchBuffer(mediaUrl);
-
                 const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
-                if (isImage) {
-                    await sock.sendMessage(jid, { image: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
-                }
+                await sock.sendMessage(
+                    jid,
+                    isImage
+                        ? { image: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }
+                        : { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" },
+                    { quoted: msg }
+                );
             } catch (err) {
-                console.error("Insta Error:", err.message);
                 await reply(`❌ *Insta Error:* ${err.message}`);
             }
         }
@@ -138,22 +128,12 @@ module.exports = [
             if (!url || (!url.includes("facebook.com") && !url.includes("fb.watch"))) {
                 return reply("❌ *ദയവായി ഒരു ശരിയായ Facebook വീഡിയോ ലിങ്ക് നൽകുക!*\nഉദാഹരണം: `.fb https://www.facebook.com/...`");
             }
-
             try {
                 await reply("⏳ *Facebook വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await fetchFbDirect(url);
+                const mediaUrl = await getFbMedia(url);
                 const buffer = await fetchBuffer(mediaUrl);
-
-                await sock.sendMessage(
-                    jid,
-                    {
-                        video: buffer,
-                        caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*"
-                    },
-                    { quoted: msg }
-                );
+                await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
             } catch (err) {
-                console.error("FB Error:", err.message);
                 await reply(`❌ *FB Error:* ${err.message}`);
             }
         }
