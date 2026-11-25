@@ -1,5 +1,5 @@
 
-const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+const { downloadContentFromMessage, jidNormalizedUser } = require("@whiskeysockets/baileys");
 const { exec } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -40,7 +40,7 @@ module.exports = [
         type: "whatsapp",
         async execute({ sock, msg, text, reply }) {
             try {
-                const botJid = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+                const botJid = jidNormalizedUser(sock.user.id);
 
                 if (text?.trim().toLowerCase() === "remove") {
                     await sock.removeProfilePicture(botJid);
@@ -59,21 +59,7 @@ module.exports = [
                 const rawBuf = await getBuffer(img);
                 const fullBuf = await makeFullSquare(rawBuf);
 
-                await sock.query({
-                    tag: "iq",
-                    attrs: {
-                        to: "@s.whatsapp.net",
-                        type: "set",
-                        xmlns: "w:profile:picture"
-                    },
-                    content: [
-                        {
-                            tag: "picture",
-                            attrs: { type: "image" },
-                            content: fullBuf
-                        }
-                    ]
-                });
+                await sock.updateProfilePicture(botJid, fullBuf);
 
                 await reply("✅ *ഫോട്ടോ കട്ട് ആകാതെ Full DP ആയി സെറ്റ് ചെയ്തു!*");
             } catch (err) {
@@ -103,7 +89,7 @@ module.exports = [
                 const img = quoted?.imageMessage || msg.message?.imageMessage;
 
                 if (!img) {
-                    return reply("❌ *ഗ്രൂപ്പ് ഫുൾ ഡിപി ആക്കേണ്ട ഫോട്ടോയ്ക്ക് റിപ്ലൈ ആയി `.fullgpp` അല്ലെങ്കിൽ `.gpp` എന്ന് അയക്കുക!*");
+                    return reply("❌ *ഗ്രൂപ്പ് ഫുൾ ഡിപി ആക്കേണ്ട ഫോട്ടോയ്ക്ക് റിപ്ലൈ ആയി `.fullgpp` അല്ലെങ്കിൽ `.pp` എന്ന് അയക്കുക!*");
                 }
 
                 await reply("⏳ *Setting Full Group DP...*");
@@ -111,21 +97,7 @@ module.exports = [
                 const rawBuf = await getBuffer(img);
                 const fullBuf = await makeFullSquare(rawBuf);
 
-                await sock.query({
-                    tag: "iq",
-                    attrs: {
-                        to: jid,
-                        type: "set",
-                        xmlns: "w:profile:picture"
-                    },
-                    content: [
-                        {
-                            tag: "picture",
-                            attrs: { type: "image" },
-                            content: fullBuf
-                        }
-                    ]
-                });
+                await sock.updateProfilePicture(jid, fullBuf);
 
                 await reply("✅ *ഗ്രൂപ്പ് പ്രൊഫൈൽ ഫോട്ടോ Full Size-ൽ അപ്‌ഡേറ്റ് ചെയ്തു!*");
             } catch (err) {
