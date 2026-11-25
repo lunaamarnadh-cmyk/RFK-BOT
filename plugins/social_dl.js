@@ -1,44 +1,76 @@
+
 const axios = require("axios");
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
-// Download media as Buffer so WhatsApp sends it reliably without 403 errors
 async function fetchBuffer(url) {
     const res = await axios.get(url, {
         responseType: "arraybuffer",
-        headers: { "User-Agent": UA },
+        headers: { "User-Agent": UA, "Accept": "*/*" },
         timeout: 30000
     });
     return Buffer.from(res.data);
 }
 
-// Jarvis / Jawad-MD Style Multi-API Instagram Downloader
-async function getInstaUrl(url) {
+// Multi-Mirror Cobalt + Direct Scraper (Works for both Instagram & Facebook)
+async function getSocialMediaUrl(url) {
     const cleanUrl = url.split("?")[0].trim();
-    const apis = [
+
+    // 1. Try Multiple Public Cobalt Instances (Most reliable for IG & FB)
+    const cobaltMirrors = [
+        "https://cobalt-api.kwiatekmiki.com/",
+        "https://cobalt.api.timelessnesses.me/",
+        "https://api.cobalt.best/",
+        "https://cobalt-backend.canine.tools/"
+    ];
+
+    for (const mirror of cobaltMirrors) {
+        try {
+            const res = await axios.post(
+                mirror,
+                { url: cleanUrl, videoQuality: "720", filenameStyle: "basic" },
+                {
+                    headers: {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "User-Agent": UA
+                    },
+                    timeout: 12000
+                }
+            );
+            const data = res.data;
+            if (data?.url) return data.url;
+            if (Array.isArray(data?.picker) && data.picker.length > 0) {
+                return data.picker[0].url;
+            }
+        } catch {
+            continue;
+        }
+    }
+
+    // 2. Fallback APIs
+    const backupApis = [
         async () => {
-            const res = await axios.get(`https://api.davidcyriltech.my.id/instagram?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            return res.data?.downloadUrl || res.data?.result?.[0]?.url || null;
+            const res = await axios.get(`https://api.agatz.xyz/api/instagram?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const d = res.data?.data;
+            return Array.isArray(d) && d[0]?.url ? d[0].url : d?.url || null;
         },
         async () => {
-            const res = await axios.get(`https://bk9.fun/download/instagram?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            const data = res.data?.BK9;
-            return Array.isArray(data) && data.length > 0 ? data[0].url : null;
+            const res = await axios.get(`https://api.agatz.xyz/api/facebook?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            return res.data?.data?.hd || res.data?.data?.sd || null;
         },
         async () => {
-            const res = await axios.get(`https://api.giftedtech.web.id/api/download/instadl?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            const r = res.data?.result;
-            if (Array.isArray(r) && r[0]?.download_url) return r[0].download_url;
-            return r?.download_url || null;
+            const res = await axios.get(`https://api.vreden.web.id/api/igdownload?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const d = res.data?.result?.data;
+            return Array.isArray(d) && d[0]?.url ? d[0].url : null;
         },
         async () => {
-            const res = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            const data = res.data?.data;
-            return Array.isArray(data) && data.length > 0 ? data[0].url : null;
+            const res = await axios.get(`https://api.vreden.web.id/api/fbdl?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            return res.data?.result?.hd || res.data?.result?.sd || null;
         }
     ];
 
-    for (const api of apis) {
+    for (const api of backupApis) {
         try {
             const link = await api();
             if (link && link.startsWith("http")) return link;
@@ -46,43 +78,8 @@ async function getInstaUrl(url) {
             continue;
         }
     }
-    throw new Error("Instagram വീഡിയോ ലഭ്യമല്ല. അല്പം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കുക.");
-}
 
-// Jarvis / Jawad-MD Style Multi-API Facebook Downloader
-async function getFbUrl(url) {
-    const cleanUrl = url.trim();
-    const apis = [
-        async () => {
-            const res = await axios.get(`https://api.davidcyriltech.my.id/facebook?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            return res.data?.video?.hd || res.data?.video?.sd || res.data?.result?.hd || null;
-        },
-        async () => {
-            const res = await axios.get(`https://bk9.fun/download/fb?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            return res.data?.BK9?.hd || res.data?.BK9?.sd || null;
-        },
-        async () => {
-            const res = await axios.get(`https://api.giftedtech.web.id/api/download/fbdl?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            const r = res.data?.result;
-            return r?.hd_video || r?.sd_video || r?.url || null;
-        },
-        async () => {
-            const res = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
-            const data = res.data?.data;
-            if (Array.isArray(data) && data.length > 0) return data[0].url;
-            return data?.hd || data?.sd || null;
-        }
-    ];
-
-    for (const api of apis) {
-        try {
-            const link = await api();
-            if (link && link.startsWith("http")) return link;
-        } catch {
-            continue;
-        }
-    }
-    throw new Error("Facebook വീഡിയോ ലഭ്യമല്ല. ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പുവരുത്തുക.");
+    throw new Error("മീഡിയ ലിങ്ക് ലഭ്യമായില്ല. ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പുവരുത്തി വീണ്ടും ശ്രമിക്കുക.");
 }
 
 module.exports = [
@@ -98,7 +95,7 @@ module.exports = [
 
             try {
                 await reply("⏳ *Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await getInstaUrl(url);
+                const mediaUrl = await getSocialMediaUrl(url);
                 const buffer = await fetchBuffer(mediaUrl);
 
                 const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
@@ -125,7 +122,7 @@ module.exports = [
 
             try {
                 await reply("⏳ *Facebook വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await getFbUrl(url);
+                const mediaUrl = await getSocialMediaUrl(url);
                 const buffer = await fetchBuffer(mediaUrl);
 
                 await sock.sendMessage(
