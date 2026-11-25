@@ -1,4 +1,10 @@
+
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+const { exec } = require("child_process");
+const util = require("util");
+const execPromise = util.promisify(exec);
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
@@ -26,7 +32,7 @@ function shortcodeToMediaId(shortcode) {
     return mediaId.toString();
 }
 
-// Primary: Instagram API using IG_COOKIE (100% Reliable)
+// Primary: Instagram API with Audio+Video DASH Merge
 async function getInstaMedia(url) {
     const shortcode = extractShortcode(url);
     if (!shortcode) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
@@ -46,9 +52,27 @@ async function getInstaMedia(url) {
             });
             const item = res.data?.items?.[0];
             if (item) {
-                if (item.video_versions?.length > 0) return item.video_versions[0].url;
-                if (item.carousel_media?.[0]?.video_versions?.length > 0) return item.carousel_media[0].video_versions[0].url;
-                if (item.image_versions2?.candidates?.length > 0) return item.image_versions2.candidates[0].url;
+                const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
+
+                // DASH Audio + Video Merge (Fixes No-Sound Reels)
+                if (mediaObj.video_dash_manifest && mediaObj.video_versions?.length > 0) {
+                    const manifest = mediaObj.video_dash_manifest;
+                    const audioMatch = manifest.match(/<AdaptationSet[^>]*contentType="audio"[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i) ||
+                                       manifest.match(/<Representation[^>]*mimeType="audio\/mp4"[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i);
+
+                    if (audioMatch?.[1]) {
+                        const audioUrl = audioMatch[1].replace(/&amp;/g, "&");
+                        const videoUrl = mediaObj.video_versions[0].url;
+                        return { type: "dash", videoUrl, audioUrl };
+                    }
+                }
+
+                if (mediaObj.video_versions?.length > 0) {
+                    return { type: "video", url: mediaObj.video_versions[0].url };
+                }
+                if (mediaObj.image_versions2?.candidates?.length > 0) {
+                    return { type: "image", url: mediaObj.image_versions2.candidates[0].url };
+                }
             }
         } catch (e) {
             console.error("Cookie API error:", e.message);
@@ -63,7 +87,9 @@ async function getInstaMedia(url) {
         });
         const html = embedRes.data || "";
         const vMatch = html.match(/"video_url":"([^"]+)"/);
-        if (vMatch?.[1]) return vMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "");
+        if (vMatch?.[1]) {
+            return { type: "video", url: vMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "") };
+        }
     } catch {}
 
     throw new Error(
@@ -71,6 +97,28 @@ async function getInstaMedia(url) {
             ? "IG_COOKIE കാലാവധി കഴിഞ്ഞു. പുതിയ sessionid അപ്‌ഡേറ്റ് ചെയ്യുക."
             : "Render/Railway-യിൽ IG_COOKIE സെറ്റ് ചെയ്തിട്ടില്ല! sessionid ചേർക്കുക."
     );
+}
+
+// Merge Video and Audio using FFmpeg
+async function mergeVideoAudio(videoUrl, audioUrl) {
+    const id = Date.now();
+    const vPath = path.join("/tmp", `ig_v_${id}.mp4`);
+    const aPath = path.join("/tmp", `ig_a_${id}.m4a`);
+    const outPath = path.join("/tmp", `ig_out_${id}.mp4`);
+
+    try {
+        const [vBuf, aBuf] = await Promise.all([fetchBuffer(videoUrl), fetchBuffer(audioUrl)]);
+        fs.writeFileSync(vPath, vBuf);
+        fs.writeFileSync(aPath, aBuf);
+
+        await execPromise(`ffmpeg -y -i "${vPath}" -i "${aPath}" -c:v copy -c:a aac -shortest "${outPath}"`);
+        const finalBuffer = fs.readFileSync(outPath);
+        return finalBuffer;
+    } finally {
+        [vPath, aPath, outPath].forEach(f => {
+            if (fs.existsSync(f)) fs.unlinkSync(f);
+        });
+    }
 }
 
 // Facebook Direct Scraper
@@ -104,16 +152,18 @@ module.exports = [
             }
             try {
                 await reply("⏳ *Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await getInstaMedia(url);
-                const buffer = await fetchBuffer(mediaUrl);
-                const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
-                await sock.sendMessage(
-                    jid,
-                    isImage
-                        ? { image: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }
-                        : { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" },
-                    { quoted: msg }
-                );
+                const media = await getInstaMedia(url);
+
+                if (media.type === "dash") {
+                    const buffer = await mergeVideoAudio(media.videoUrl, media.audioUrl);
+                    await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                } else if (media.type === "image") {
+                    const buffer = await fetchBuffer(media.url);
+                    await sock.sendMessage(jid, { image: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                } else {
+                    const buffer = await fetchBuffer(media.url);
+                    await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                }
             } catch (err) {
                 await reply(`❌ *Insta Error:* ${err.message}`);
             }
