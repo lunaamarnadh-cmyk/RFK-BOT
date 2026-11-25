@@ -1,4 +1,3 @@
-
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -50,6 +49,26 @@ function extractAudioFromDash(manifest) {
     return null;
 }
 
+async function mergeVideoAudio(videoUrl, audioUrl) {
+    const id = Date.now();
+    const vPath = path.join("/tmp", `ig_v_${id}.mp4`);
+    const aPath = path.join("/tmp", `ig_a_${id}.m4a`);
+    const outPath = path.join("/tmp", `ig_out_${id}.mp4`);
+
+    try {
+        const [vBuf, aBuf] = await Promise.all([fetchBuffer(videoUrl), fetchBuffer(audioUrl)]);
+        fs.writeFileSync(vPath, vBuf);
+        fs.writeFileSync(aPath, aBuf);
+
+        await execPromise(`ffmpeg -y -i "${vPath}" -i "${aPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest "${outPath}"`);
+        return fs.readFileSync(outPath);
+    } finally {
+        [vPath, aPath, outPath].forEach(f => {
+            if (fs.existsSync(f)) fs.unlinkSync(f);
+        });
+    }
+}
+
 async function getInstaMedia(url) {
     const shortcode = extractShortcode(url);
     if (!shortcode) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
@@ -57,8 +76,48 @@ async function getInstaMedia(url) {
     const rawCookie = (process.env.IG_COOKIE || "sessionid=51476036011%3AMYbtaqpKPGa9Zs%3A2%3AAYmIznW-I_7-zSt6MZwN49aWQEjDmHLnQZa4zMx6vg;").trim();
     const cookieHeader = rawCookie.includes("sessionid=") ? rawCookie : `sessionid=${rawCookie};`;
     const mediaId = shortcodeToMediaId(shortcode);
+    const errors = [];
 
-    // Method 1: Instagram GraphQL Query (Returns direct video_url WITH audio)
+    // 1. Try Mobile API + DASH Audio/Video Merge
+    try {
+        const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
+            headers: {
+                "User-Agent": "Instagram 317.0.0.34.109 Android (34/14; 420dpi; 1080x2400; samsung; SM-S918B; dm3q; qcom; en_US; 562236835)",
+                "X-IG-App-ID": "936619743392459",
+                "Cookie": cookieHeader
+            },
+            timeout: 15000
+        });
+        const item = res.data?.items?.[0];
+        if (item) {
+            const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
+            if (mediaObj.video_versions?.length > 0) {
+                const videoUrl = mediaObj.video_versions[0].url;
+                let audioUrl = mediaObj.audio_versions?.[0]?.url ||
+                               extractAudioFromDash(mediaObj.video_dash_manifest) ||
+                               item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
+                               item.clips_metadata?.original_sound_info?.progressive_download_url ||
+                               null;
+
+                if (audioUrl) {
+                    const buffer = await mergeVideoAudio(videoUrl, audioUrl);
+                    return { type: "video", buffer, source: "Mobile API + Audio Merge" };
+                }
+                const buffer = await fetchBuffer(videoUrl);
+                return { type: "video", buffer, source: "Mobile API (No separate audio found)" };
+            }
+            if (mediaObj.image_versions2?.candidates?.length > 0) {
+                const buffer = await fetchBuffer(mediaObj.image_versions2.candidates[0].url);
+                return { type: "image", buffer, source: "Mobile API Image" };
+            }
+        } else {
+            errors.push("MobileAPI: No items");
+        }
+    } catch (e) {
+        errors.push(`MobileAPI: ${e.response?.status || e.message}`);
+    }
+
+    // 2. Try GraphQL Query
     try {
         const gqlRes = await axios.post(
             "https://www.instagram.com/api/graphql",
@@ -83,58 +142,16 @@ async function getInstaMedia(url) {
         );
 
         const mediaData = gqlRes.data?.data?.xdt_shortcode_media;
-        if (mediaData) {
-            if (mediaData.is_video && mediaData.video_url) {
-                return { type: "video", url: mediaData.video_url };
-            }
-            if (mediaData.edge_sidecar_to_children?.edges?.length > 0) {
-                const firstNode = mediaData.edge_sidecar_to_children.edges[0].node;
-                if (firstNode.is_video && firstNode.video_url) {
-                    return { type: "video", url: firstNode.video_url };
-                }
-            }
+        if (mediaData?.is_video && mediaData.video_url) {
+            const buffer = await fetchBuffer(mediaData.video_url);
+            return { type: "video", buffer, source: "GraphQL" };
         }
+        errors.push("GraphQL: No video_url");
     } catch (e) {
-        console.error("GraphQL error:", e.message);
+        errors.push(`GraphQL: ${e.response?.status || e.message}`);
     }
 
-    // Method 2: Mobile API + DASH Audio/Video Merge
-    if (rawCookie) {
-        try {
-            const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
-                headers: {
-                    "User-Agent": "Instagram 317.0.0.34.109 Android (34/14; 420dpi; 1080x2400; samsung; SM-S918B; dm3q; qcom; en_US; 562236835)",
-                    "X-IG-App-ID": "936619743392459",
-                    "Cookie": cookieHeader
-                },
-                timeout: 15000
-            });
-            const item = res.data?.items?.[0];
-            if (item) {
-                const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
-                if (mediaObj.video_versions?.length > 0) {
-                    const videoUrl = mediaObj.video_versions[0].url;
-                    let audioUrl = mediaObj.audio_versions?.[0]?.url ||
-                                   extractAudioFromDash(mediaObj.video_dash_manifest) ||
-                                   item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
-                                   item.clips_metadata?.original_sound_info?.progressive_download_url ||
-                                   null;
-
-                    if (audioUrl) {
-                        return { type: "dash", videoUrl, audioUrl };
-                    }
-                    return { type: "video", url: videoUrl };
-                }
-                if (mediaObj.image_versions2?.candidates?.length > 0) {
-                    return { type: "image", url: mediaObj.image_versions2.candidates[0].url };
-                }
-            }
-        } catch (e) {
-            console.error("Mobile API error:", e.message);
-        }
-    }
-
-    // Method 3: Embed Page Fallback
+    // 3. Fallback: Embed Page (Video only on most reels)
     try {
         const embedRes = await axios.get(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
             headers: { "User-Agent": UA },
@@ -143,31 +160,15 @@ async function getInstaMedia(url) {
         const html = embedRes.data || "";
         const vMatch = html.match(/"video_url":"([^"]+)"/);
         if (vMatch?.[1]) {
-            return { type: "video", url: vMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "") };
+            const cleanUrl = vMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "");
+            const buffer = await fetchBuffer(cleanUrl);
+            return { type: "video", buffer, source: `Embed Fallback (${errors.join(" | ")})` };
         }
-    } catch {}
-
-    throw new Error("Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല (പുതിയ sessionid നൽകുക).");
-}
-
-async function mergeVideoAudio(videoUrl, audioUrl) {
-    const id = Date.now();
-    const vPath = path.join("/tmp", `ig_v_${id}.mp4`);
-    const aPath = path.join("/tmp", `ig_a_${id}.m4a`);
-    const outPath = path.join("/tmp", `ig_out_${id}.mp4`);
-
-    try {
-        const [vBuf, aBuf] = await Promise.all([fetchBuffer(videoUrl), fetchBuffer(audioUrl)]);
-        fs.writeFileSync(vPath, vBuf);
-        fs.writeFileSync(aPath, aBuf);
-
-        await execPromise(`ffmpeg -y -i "${vPath}" -i "${aPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest "${outPath}"`);
-        return fs.readFileSync(outPath);
-    } finally {
-        [vPath, aPath, outPath].forEach(f => {
-            if (fs.existsSync(f)) fs.unlinkSync(f);
-        });
+    } catch (e) {
+        errors.push(`Embed: ${e.message}`);
     }
+
+    throw new Error(`ഡൗൺലോഡ് പരാജയപ്പെട്ടു: ${errors.join(" | ")}`);
 }
 
 async function getFbMedia(url) {
@@ -202,15 +203,10 @@ module.exports = [
                 await reply("⏳ *Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
                 const media = await getInstaMedia(url);
 
-                if (media.type === "dash") {
-                    const buffer = await mergeVideoAudio(media.videoUrl, media.audioUrl);
-                    await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
-                } else if (media.type === "image") {
-                    const buffer = await fetchBuffer(media.url);
-                    await sock.sendMessage(jid, { image: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                if (media.type === "image") {
+                    await sock.sendMessage(jid, { image: media.buffer, caption: `✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*\n_Source: ${media.source}_` }, { quoted: msg });
                 } else {
-                    const buffer = await fetchBuffer(media.url);
-                    await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                    await sock.sendMessage(jid, { video: media.buffer, caption: `✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*\n_Source: ${media.source}_` }, { quoted: msg });
                 }
             } catch (err) {
                 await reply(`❌ *Insta Error:* ${err.message}`);
