@@ -9,7 +9,7 @@ function getBotName() {
             const data = JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
             if (data.botName) return data.botName;
         }
-    } catch {}
+    } catch (e) {}
     return process.env.BOT_NAME || "乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂";
 }
 
@@ -19,7 +19,7 @@ function saveBotName(name) {
         if (fs.existsSync(DB_PATH)) {
             data = JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
         }
-    } catch {}
+    } catch (e) {}
     data.botName = name;
     fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
 }
@@ -30,7 +30,7 @@ module.exports = [
         alias: ["botname", "setbname"],
         type: "owner",
         async execute({ text, reply }) {
-            const newName = text?.trim();
+            const newName = text ? text.trim() : "";
             if (!newName) {
                 return reply(
                     `📌 *നിലവിലെ ബോട്ടിന്റെ പേര്:* ${getBotName()}\n\n` +
