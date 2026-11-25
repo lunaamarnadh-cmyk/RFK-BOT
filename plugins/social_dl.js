@@ -28,50 +28,36 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
-// 1. IronMan API (Used by Jarvis-MD)
-async function tryIronManApi(url) {
-    const endpoints = [
-        `https://ironman.koyeb.app/ironman/dl/ig?url=${encodeURIComponent(url)}`,
-        `https://ironman.koyeb.app/ironman/ig/dl?url=${encodeURIComponent(url)}`,
-        `https://ironman.koyeb.app/ironman/dl/insta?url=${encodeURIComponent(url)}`
-    ];
-    for (const ep of endpoints) {
-        try {
-            const { data } = await axios.get(ep, { headers: { "User-Agent": UA }, timeout: 15000 });
-            const items = data?.result || data?.media || data?.data || (Array.isArray(data) ? data : null);
-            if (Array.isArray(items) && items.length > 0) {
-                const mediaUrl = items[0]?.url || items[0]?.download_url || items[0];
-                if (typeof mediaUrl === "string" && mediaUrl.startsWith("http")) {
-                    const isImg = items[0]?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
-                    return { type: isImg ? "image" : "video", url: mediaUrl };
-                }
-            }
-            const single = data?.url || data?.videoUrl || data?.download;
-            if (typeof single === "string" && single.startsWith("http")) {
-                return { type: "video", url: single };
-            }
-        } catch {}
-    }
-    return null;
-}
-
-// 2. SaveIG / RapidCDN Scraper API
-async function trySaveIgApi(url) {
+// 1. SaveIG with dynamic k_token extraction (Returns full MP4 with Audio)
+async function trySaveIgWithToken(url) {
     try {
-        const res = await axios.post(
-            "https://saveig.app/api/ajaxSearch",
-            new URLSearchParams({ q: url, t: "media", lang: "en" }).toString(),
-            {
-                headers: {
-                    "User-Agent": UA,
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "Origin": "https://saveig.app",
-                    "Referer": "https://saveig.app/en",
-                    "X-Requested-With": "XMLHttpRequest"
-                },
-                timeout: 15000
-            }
-        );
+        const home = await axios.get("https://saveig.app/en", {
+            headers: { "User-Agent": UA },
+            timeout: 10000
+        });
+        const htmlHome = home.data || "";
+        const kExp = htmlHome.match(/k_exp\s*=\s*"([^"]+)"/)?.[1] || "";
+        const kToken = htmlHome.match(/k_token\s*=\s*"([^"]+)"/)?.[1] || "";
+
+        const payload = new URLSearchParams({
+            q: url,
+            t: "media",
+            lang: "en",
+            ...(kExp && { k_exp: kExp }),
+            ...(kToken && { k_token: kToken })
+        }).toString();
+
+        const res = await axios.post("https://v3.saveig.app/api/ajaxSearch", payload, {
+            headers: {
+                "User-Agent": UA,
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Origin": "https://saveig.app",
+                "Referer": "https://saveig.app/en",
+                "X-Requested-With": "XMLHttpRequest"
+            },
+            timeout: 15000
+        });
+
         const html = res.data?.data || "";
         const vidMatch = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Video"/i) ||
                          html.match(/href="(https:\/\/d\.rapidcdn\.app[^"]+)"/i);
@@ -86,46 +72,48 @@ async function trySaveIgApi(url) {
     return null;
 }
 
-// 3. SnapSave / V3 API
-async function trySnapSaveApi(url) {
-    try {
-        const res = await axios.post(
-            "https://v3.saveig.app/api/ajaxSearch",
-            new URLSearchParams({ q: url, t: "media", lang: "en" }).toString(),
-            {
-                headers: {
-                    "User-Agent": UA,
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "Origin": "https://saveig.app",
-                    "Referer": "https://saveig.app/en"
-                },
-                timeout: 15000
-            }
-        );
-        const html = res.data?.data || "";
-        const match = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Video"/i);
-        if (match?.[1]) {
-            return { type: "video", url: match[1].replace(/&amp;/g, "&") };
-        }
-    } catch {}
-    return null;
-}
-
-// 4. Gifted / Siputzx / NexOracle Public Bot APIs
-async function tryPublicBotApis(url) {
+// 2. Working WhatsApp Bot REST APIs (BK9, Ryzendesu, Vreden, DavidCyril, IronMan)
+async function tryBotRestApis(url) {
+    const encoded = encodeURIComponent(url);
     const apis = [
-        `https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(url)}`,
-        `https://api.giftedtech.web.id/api/download/instadl?apikey=gifted&url=${encodeURIComponent(url)}`
+        `https://bk9.fun/download/instagram?url=${encoded}`,
+        `https://api.ryzendesu.vip/api/downloader/igdl?url=${encoded}`,
+        `https://api.vreden.my.id/api/igdownload?url=${encoded}`,
+        `https://apis.davidcyriltech.my.id/instagram?url=${encoded}`,
+        `https://ironman.koyeb.app/ironman/dl/ig?url=${encoded}`
     ];
+
     for (const apiUrl of apis) {
         try {
-            const { data } = await axios.get(apiUrl, { headers: { "User-Agent": UA }, timeout: 15000 });
-            const list = data?.data || data?.result;
-            if (Array.isArray(list) && list.length > 0) {
-                const u = list[0]?.url || list[0]?.download_url;
-                if (u) return { type: "video", url: u };
-            } else if (list?.url || list?.download_url) {
-                return { type: "video", url: list.url || list.download_url };
+            const { data } = await axios.get(apiUrl, {
+                headers: { "User-Agent": UA },
+                timeout: 15000
+            });
+
+            // Handle various response structures
+            const candidates = [
+                data?.BK9,
+                data?.result?.data,
+                data?.result,
+                data?.data,
+                data?.media,
+                Array.isArray(data) ? data : null
+            ].filter(Boolean);
+
+            for (const item of candidates) {
+                if (Array.isArray(item) && item.length > 0) {
+                    const first = item[0];
+                    const mediaUrl = first?.url || first?.download_url || first?.video || first?.link || (typeof first === "string" ? first : null);
+                    if (mediaUrl && mediaUrl.startsWith("http")) {
+                        const isImg = first?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
+                        return { type: isImg ? "image" : "video", url: mediaUrl };
+                    }
+                } else if (typeof item === "object") {
+                    const mediaUrl = item?.url || item?.download_url || item?.video || item?.videoUrl || item?.link;
+                    if (mediaUrl && mediaUrl.startsWith("http")) {
+                        return { type: "video", url: mediaUrl };
+                    }
+                }
             }
         } catch {}
     }
@@ -136,14 +124,10 @@ async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    const result =
-        (await tryIronManApi(url)) ||
-        (await trySaveIgApi(url)) ||
-        (await trySnapSaveApi(url)) ||
-        (await tryPublicBotApis(url));
+    const result = (await tryBotRestApis(url)) || (await trySaveIgWithToken(url));
 
     if (!result || !result.url) {
-        throw new Error("വീഡിയോ ലഭിച്ചില്ല. ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പാക്കുക.");
+        throw new Error("API-കളിൽ നിന്ന് വീഡിയോ ലഭിച്ചില്ല. അൽപസമയത്തിന് ശേഷം വീണ്ടും ശ്രമിക്കുക.");
     }
 
     const buffer = await fetchBuffer(result.url);
