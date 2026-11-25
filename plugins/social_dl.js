@@ -17,7 +17,6 @@ async function fetchBuffer(url) {
     return Buffer.from(res.data);
 }
 
-// Resolve /share/reel/... links to actual /reel/... URL
 async function resolveInstaUrl(url) {
     if (url.includes("/share/")) {
         try {
@@ -47,19 +46,6 @@ function shortcodeToMediaId(shortcode) {
         mediaId = mediaId * BigInt(64) + BigInt(alphabet.indexOf(shortcode[i]));
     }
     return mediaId.toString();
-}
-
-async function hasAudioTrack(buffer) {
-    const tempFile = path.join("/tmp", `chk_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
-    try {
-        fs.writeFileSync(tempFile, buffer);
-        const { stdout } = await execPromise(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${tempFile}"`);
-        return stdout.trim().includes("audio");
-    } catch {
-        return false;
-    } finally {
-        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-    }
 }
 
 function extractAudioFromDash(manifest) {
@@ -101,17 +87,86 @@ async function mergeVideoAudio(videoUrl, audioUrl) {
     }
 }
 
+// Method 1: External Downloader API (Bypasses Cloud IP Block & Includes Audio)
+async function fetchFromExternalApi(url) {
+    // 1A. Try FastDL / SaveIG style endpoint
+    try {
+        const res = await axios.post(
+            "https://v3.igdownloader.app/api/ajaxSearch",
+            new URLSearchParams({
+                recaptchaToken: "",
+                q: url,
+                t: "media",
+                lang: "en"
+            }).toString(),
+            {
+                headers: {
+                    "User-Agent": UA,
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Origin": "https://igdownloader.app",
+                    "Referer": "https://igdownloader.app/",
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                timeout: 15000
+            }
+        );
+        const html = res.data?.data || "";
+        const dlMatch = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Video"/i) ||
+                        html.match(/href="(https:\/\/d\.rapidcdn\.app[^"]+)"/i) ||
+                        html.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i);
+        if (dlMatch?.[1]) {
+            const cleanUrl = dlMatch[1].replace(/&amp;/g, "&");
+            const buffer = await fetchBuffer(cleanUrl);
+            return { type: "video", buffer, source: "FastDL (With Audio)" };
+        }
+    } catch {}
+
+    // 1B. Try SnapSave / SSSInstagram style endpoint
+    try {
+        const res = await axios.post(
+            "https://api.sssgram.com/st-tik/ins/dl",
+            { url },
+            {
+                headers: {
+                    "User-Agent": UA,
+                    "Content-Type": "application/json",
+                    "Origin": "https://www.sssgram.com",
+                    "Referer": "https://www.sssgram.com/"
+                },
+                timeout: 15000
+            }
+        );
+        const mediaList = res.data?.result?.insBos || res.data?.data || [];
+        if (Array.isArray(mediaList) && mediaList.length > 0) {
+            const videoUrl = mediaList[0].url || mediaList[0].video_url;
+            if (videoUrl) {
+                const buffer = await fetchBuffer(videoUrl);
+                return { type: "video", buffer, source: "SSSGram (With Audio)" };
+            }
+        }
+    } catch {}
+
+    return null;
+}
+
 async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     const shortcode = extractShortcode(url);
     if (!shortcode) throw new Error(`Instagram ലിങ്ക് വായിക്കാൻ കഴിഞ്ഞില്ല (${url})`);
 
+    const cleanInstaUrl = `https://www.instagram.com/reel/${shortcode}/`;
+    const errors = [];
+
+    // 1. Try External APIs first (Always includes audio & avoids Render IP rate-limits)
+    const extMedia = await fetchFromExternalApi(cleanInstaUrl);
+    if (extMedia) return extMedia;
+    errors.push("ExternalAPI: Unavailable");
+
+    // 2. Mobile API (Single request - picks muxed stream directly from JSON without extra downloads)
     const rawCookie = (process.env.IG_COOKIE || "sessionid=51476036011%3AMYbtaqpKPGa9Zs%3A2%3AAYmIznW-I_7-zSt6MZwN49aWQEjDmHLnQZa4zMx6vg;").trim();
     const cookieHeader = rawCookie.includes("sessionid=") ? rawCookie : `sessionid=${rawCookie};`;
     const mediaId = shortcodeToMediaId(shortcode);
-    const errors = [];
 
-    // 1. Mobile API
     try {
         const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
             headers: {
@@ -126,45 +181,34 @@ async function getInstaMedia(rawUrl) {
             const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
 
             if (mediaObj.video_versions?.length > 0) {
-                let audioUrl = mediaObj.audio_versions?.[0]?.url ||
-                               extractAudioFromDash(mediaObj.video_dash_manifest) ||
-                               item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
-                               item.clips_metadata?.original_sound_info?.progressive_download_url ||
-                               null;
+                // Check for separate audio first
+                const audioUrl = mediaObj.audio_versions?.[0]?.url ||
+                                 extractAudioFromDash(mediaObj.video_dash_manifest) ||
+                                 item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
+                                 item.clips_metadata?.original_sound_info?.progressive_download_url ||
+                                 null;
 
                 if (audioUrl) {
                     const buffer = await mergeVideoAudio(mediaObj.video_versions[0].url, audioUrl);
                     return { type: "video", buffer, source: "Mobile API (Merged Audio)" };
                 }
 
-                let firstBuffer = null;
-                for (let i = 0; i < mediaObj.video_versions.length; i++) {
-                    const vUrl = mediaObj.video_versions[i].url;
-                    const buf = await fetchBuffer(vUrl);
-                    if (i === 0) firstBuffer = buf;
-
-                    if (await hasAudioTrack(buf)) {
-                        return { type: "video", buffer: buf, source: `Mobile API (Muxed v${i})` };
-                    }
-                }
-
-                if (firstBuffer) {
-                    return { type: "video", buffer: firstBuffer, source: "Mobile API (No Audio)" };
-                }
+                // Pick the last/lowest type number video_version (Instagram puts muxed audio+video at the end/type 101)
+                const muxedCandidate = mediaObj.video_versions[mediaObj.video_versions.length - 1];
+                const buffer = await fetchBuffer(muxedCandidate.url);
+                return { type: "video", buffer, source: "Mobile API (Muxed Stream)" };
             }
 
             if (mediaObj.image_versions2?.candidates?.length > 0) {
                 const buffer = await fetchBuffer(mediaObj.image_versions2.candidates[0].url);
                 return { type: "image", buffer, source: "Mobile API Image" };
             }
-        } else {
-            errors.push(`MobileAPI: ${res.data?.message || "Empty items"}`);
         }
     } catch (e) {
         errors.push(`MobileAPI: ${e.response?.data?.message || e.response?.status || e.message}`);
     }
 
-    // 2. Embed Page Fallback
+    // 3. Embed Page Fallback
     try {
         const embedRes = await axios.get(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
             headers: { "User-Agent": UA },
@@ -177,7 +221,6 @@ async function getInstaMedia(rawUrl) {
             const buffer = await fetchBuffer(cleanUrl);
             return { type: "video", buffer, source: "Embed Fallback" };
         }
-        errors.push("Embed: No video_url");
     } catch (e) {
         errors.push(`Embed: ${e.message}`);
     }
