@@ -50,7 +50,7 @@ Render, Railway, Heroku, അല്ലെങ്കിൽ ഏതെങ്കില
 ## 📱 Termux / Local Installation
 
 ```bash
-git clone [https://github.com/lunaamarnadh-cmyk/RFK-BOT](https://github.com/lunaamarnadh-cmyk/RFK-BOT)
+git clone [https://github.com/lunaamarnadh-cmyk/RFK-BOT.git](https://github.com/lunaamarnadh-cmyk/RFK-BOT.git)
 cd RFK-BOT
 npm install
 npm start
@@ -65,3 +65,4 @@ npm start
 - **GitHub:** [RFK-BOT](https://github.com/lunaamarnadh-cmyk/RFK-BOT)
 
 > ⚠️ *Disclaimer: This bot is created for educational and personal automation purposes. Use responsibly.*
+> 
