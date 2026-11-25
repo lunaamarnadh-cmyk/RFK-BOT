@@ -30,19 +30,27 @@ async function ensureYtDlp() {
     return YTDLP_PATH;
 }
 
-function writeCookieFile() {
+function getSessionInfo() {
     const rawCookie = (process.env.IG_COOKIE || DEFAULT_SESSION_ID).trim();
-    if (!rawCookie || rawCookie === "NEW_SESSION_ID_HERE") return null;
-
+    if (!rawCookie || rawCookie === "NEW_SESSION_ID_HERE") return { sessionVal: null, userId: null };
     const match = rawCookie.match(/sessionid=([^;]+)/);
     const sessionVal = match ? match[1] : rawCookie.replace(/;/g, "");
+    const userId = sessionVal.split("%3A")[0] || sessionVal.split(":")[0] || "";
+    return { sessionVal, userId };
+}
 
-    const content = [
+function writeCookieFile() {
+    const { sessionVal, userId } = getSessionInfo();
+    if (!sessionVal) return null;
+
+    const lines = [
         "# Netscape HTTP Cookie File",
         `.instagram.com\tTRUE\t/\tTRUE\t2147483647\tsessionid\t${sessionVal}`
-    ].join("\n");
-
-    fs.writeFileSync(COOKIE_FILE, content);
+    ];
+    if (userId) {
+        lines.push(`.instagram.com\tTRUE\t/\tTRUE\t2147483647\tds_user_id\t${userId}`);
+    }
+    fs.writeFileSync(COOKIE_FILE, lines.join("\n"));
     return COOKIE_FILE;
 }
 
@@ -62,6 +70,121 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
+function extractShortcode(url) {
+    const clean = url.split("?")[0].replace(/\/$/, "");
+    const match = clean.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
+    return match ? match[2] : null;
+}
+
+function shortcodeToMediaId(shortcode) {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mediaId = BigInt(0);
+    for (let i = 0; i < shortcode.length; i++) {
+        mediaId = mediaId * BigInt(64) + BigInt(alphabet.indexOf(shortcode[i]));
+    }
+    return mediaId.toString();
+}
+
+// Recursively search any Instagram API JSON object for audio / music URLs
+function findAudioUrlInJson(obj) {
+    if (!obj || typeof obj !== "object") return null;
+
+    if (typeof obj.progressive_download_url === "string" && obj.progressive_download_url.startsWith("http")) {
+        return obj.progressive_download_url;
+    }
+    if (typeof obj.audio_url === "string" && obj.audio_url.startsWith("http")) {
+        return obj.audio_url;
+    }
+    if (typeof obj.video_dash_manifest === "string") {
+        const xml = obj.video_dash_manifest.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+        const sets = xml.match(/<AdaptationSet[\s\S]*?<\/AdaptationSet>/gi) || [];
+        for (const s of sets) {
+            if (/audio|mp4a/i.test(s)) {
+                const m = s.match(/<BaseURL>([^<]+)<\/BaseURL>/i);
+                if (m?.[1]) return m[1].trim();
+            }
+        }
+    }
+
+    for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        if (val && typeof val === "object") {
+            const found = findAudioUrlInJson(val);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+// Fetch separate music/audio track if reel video came without sound
+async function fetchSeparateAudioBuffer(url) {
+    const { sessionVal, userId } = getSessionInfo();
+    const cookieHeader = sessionVal ? `sessionid=${sessionVal}; ds_user_id=${userId};` : "";
+    const shortcode = extractShortcode(url);
+
+    // 1. Try yt-dlp audio-only extraction first
+    try {
+        const ytdlp = await ensureYtDlp();
+        const cookies = writeCookieFile();
+        const aId = `aud_${Date.now()}`;
+        const aOut = `/tmp/${aId}.%(ext)s`;
+        const cookieFlag = cookies ? `--cookies "${cookies}"` : "";
+        await execPromise(`"${ytdlp}" ${cookieFlag} -f "ba" --no-warnings -o "${aOut}" "${url}"`, { timeout: 30000 });
+        const files = fs.readdirSync("/tmp").filter(f => f.startsWith(`${aId}.`));
+        if (files.length > 0) {
+            const fPath = path.join("/tmp", files[0]);
+            const buf = fs.readFileSync(fPath);
+            fs.unlinkSync(fPath);
+            if (buf.length > 1000) return buf;
+        }
+    } catch {}
+
+    // 2. Try Mobile API JSON deep search for music_asset_info / progressive_download_url
+    if (shortcode && cookieHeader) {
+        try {
+            const mediaId = shortcodeToMediaId(shortcode);
+            const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
+                headers: {
+                    "User-Agent": "Instagram 317.0.0.34.109 Android (34/14; 420dpi; 1080x2400; samsung; SM-S918B; dm3q; qcom; en_US; 562236835)",
+                    "X-IG-App-ID": "936619743392459",
+                    "Cookie": cookieHeader
+                },
+                timeout: 15000
+            });
+            const audioUrl = findAudioUrlInJson(res.data);
+            if (audioUrl) return await fetchBuffer(audioUrl);
+        } catch {}
+    }
+
+    // 3. Try GraphQL JSON deep search
+    if (shortcode) {
+        try {
+            const gqlRes = await axios.post(
+                "https://www.instagram.com/api/graphql",
+                new URLSearchParams({
+                    variables: JSON.stringify({ shortcode }),
+                    doc_id: "10015901848480474",
+                    lsd: "AVqbxe3J_YA"
+                }).toString(),
+                {
+                    headers: {
+                        "User-Agent": UA,
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "X-IG-App-ID": "936619743392459",
+                        "X-FB-LSD": "AVqbxe3J_YA",
+                        "Cookie": cookieHeader
+                    },
+                    timeout: 15000
+                }
+            );
+            const audioUrl = findAudioUrlInJson(gqlRes.data);
+            if (audioUrl) return await fetchBuffer(audioUrl);
+        } catch {}
+    }
+
+    return null;
+}
+
 async function fileHasAudio(filePath) {
     try {
         const { stdout } = await execPromise(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${filePath}"`);
@@ -71,19 +194,42 @@ async function fileHasAudio(filePath) {
     }
 }
 
-async function makeWhatsAppCompatible(inputPath) {
-    const fixedPath = inputPath.replace(/\.[^.]+$/, "_wa.mp4");
+async function processVideoFile(inputPath, url) {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const fixedPath = `/tmp/wa_${id}.mp4`;
+    const tempAudioPath = `/tmp/wa_aud_${id}.m4a`;
+    const mergedPath = `/tmp/wa_mrg_${id}.mp4`;
+
     try {
+        // Convert to WhatsApp-compatible H.264 + AAC
         await execPromise(
             `ffmpeg -y -i "${inputPath}" -c:v libx264 -preset ultrafast -crf 24 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "${fixedPath}"`,
             { timeout: 60000 }
         );
+
         const hasAudio = await fileHasAudio(fixedPath);
-        const buf = fs.readFileSync(fixedPath);
-        return { buffer: buf, hasAudio };
+        if (hasAudio) {
+            return { buffer: fs.readFileSync(fixedPath), source: "yt-dlp (Audio Verified ✅)" };
+        }
+
+        // Video has NO audio stream -> Fetch separate music/audio track and merge!
+        const audioBuf = await fetchSeparateAudioBuffer(url);
+        if (audioBuf) {
+            fs.writeFileSync(tempAudioPath, audioBuf);
+            await execPromise(
+                `ffmpeg -y -i "${fixedPath}" -i "${tempAudioPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 128k -shortest -movflags +faststart "${mergedPath}"`,
+                { timeout: 60000 }
+            );
+            if (fs.existsSync(mergedPath) && (await fileHasAudio(mergedPath))) {
+                return { buffer: fs.readFileSync(mergedPath), source: "yt-dlp + Music Track Merged ✅" };
+            }
+        }
+
+        return { buffer: fs.readFileSync(fixedPath), source: "yt-dlp (Original Silent Reel)" };
     } finally {
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        if (fs.existsSync(fixedPath)) fs.unlinkSync(fixedPath);
+        [inputPath, fixedPath, tempAudioPath, mergedPath].forEach(f => {
+            if (fs.existsSync(f)) fs.unlinkSync(f);
+        });
     }
 }
 
@@ -94,8 +240,7 @@ async function runYtDlp(url, useCookies = true) {
     const outTemplate = `/tmp/ig_${id}.%(ext)s`;
 
     const cookieFlag = cookies ? `--cookies "${cookies}"` : "";
-    // Strictly prioritize formats WITH audio (acodec!=none), or merge bestvideo+bestaudio
-    const cmd = `"${ytdlp}" ${cookieFlag} -f "b[acodec!=none]/bv*+ba[acodec!=none]/bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
+    const cmd = `"${ytdlp}" ${cookieFlag} -f "b[acodec!=none]/bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
 
     await execPromise(cmd, { timeout: 60000 });
 
@@ -109,13 +254,8 @@ async function runYtDlp(url, useCookies = true) {
             fs.unlinkSync(fullPath);
             return { type: "image", buffer: buf, source: "yt-dlp Image" };
         }
-        const { buffer, hasAudio } = await makeWhatsAppCompatible(fullPath);
-        return {
-            type: "video",
-            buffer,
-            hasAudio,
-            source: hasAudio ? "yt-dlp (Audio Verified ✅)" : "yt-dlp (No Audio Stream)"
-        };
+        const { buffer, source } = await processVideoFile(fullPath, url);
+        return { type: "video", buffer, source };
     }
     throw new Error("Output file not created");
 }
@@ -124,20 +264,9 @@ async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    // 1. Try WITH cookies
     try {
-        const res = await runYtDlp(url, true);
-        if (res.type === "image" || res.hasAudio) return res;
-
-        // If cookie download had NO audio, try WITHOUT cookies (public embed/web often gives muxed audio+video!)
-        try {
-            const pubRes = await runYtDlp(url, false);
-            if (pubRes.hasAudio) return pubRes;
-        } catch {}
-
-        return res;
+        return await runYtDlp(url, true);
     } catch (err1) {
-        // 2. Fallback WITHOUT cookies
         try {
             return await runYtDlp(url, false);
         } catch (err2) {
