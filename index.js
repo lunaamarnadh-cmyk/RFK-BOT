@@ -1,3 +1,4 @@
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -17,15 +18,20 @@ const PORT = process.env.PORT || 8000;
 
 http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("RFK-BOT is Running Successfully!");
+    res.end("RFK-BOT is Alive & Running!");
 }).listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`));
+
+// സെർവർ ഉറങ്ങിപ്പോകാതിരിക്കാൻ Self-Ping Keep-Alive (Render/Railway)
+const APP_URL = process.env.RENDER_EXTERNAL_URL || process.env.RAILWAY_STATIC_URL || `http://localhost:${PORT}`;
+setInterval(() => {
+    const targetUrl = APP_URL.startsWith("http") ? APP_URL : `https://${APP_URL}`;
+    axios.get(targetUrl).catch(() => {});
+}, 4 * 60 * 1000);
 
 const SESSION_DIR = path.join(__dirname, "session");
 const PREFIX = process.env.PREFIX || ".";
 const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
 const MODE = (process.env.MODE || "public").toLowerCase();
-
-// ആര് ബോട്ട് സെറ്റ് ചെയ്താലും നിങ്ങളുടെ നമ്പറിന് പൂർണ്ണ അധികാരം ഉണ്ടാകാൻ (Super Owner)
 const SUPER_OWNERS = ["917907228818"];
 
 const commands = new Map();
@@ -70,7 +76,6 @@ async function restoreSession() {
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
         const rawData = sessionEnv.replace("RFK-BOT~", "").trim();
 
-        // 1. Short Session ID
         if (rawData.length < 25) {
             try {
                 let credsContent;
@@ -82,16 +87,14 @@ async function restoreSession() {
                     credsContent = typeof data === "string" ? data : JSON.stringify(data);
                 }
                 fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsContent);
-                console.log("✅ Short Session restored cleanly from SESSION_ID!");
+                console.log("✅ Short Session restored cleanly!");
             } catch (err) {
                 console.error("❌ Failed to restore Short Session:", err.message);
             }
-        } 
-        // 2. Old Long Base64 Session ID
-        else {
+        } else {
             const credsBuffer = Buffer.from(rawData, "base64");
             fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
-            console.log("✅ Base64 Session restored cleanly from SESSION_ID!");
+            console.log("✅ Base64 Session restored cleanly!");
         }
     }
 }
@@ -129,6 +132,9 @@ async function startBot() {
             browser: Browsers.macOS("Desktop"),
             syncFullHistory: false,
             shouldSyncHistoryMessage: () => false,
+            keepAliveIntervalMs: 25000,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: false,
             getMessage: async () => ({ conversation: "" })
@@ -141,9 +147,9 @@ async function startBot() {
 
             if (connection === "open") {
                 isConnecting = false;
-                // കണക്ട് ആയി 10 സെക്കൻഡ് കഴിഞ്ഞതിനു ശേഷമുള്ള ലൈവ് മെസ്സേജുകൾ മാത്രം എടുക്കാൻ
-                readyToProcessAt = Math.floor(Date.now() / 1000) + 10;
-                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected Successfully! Accepting live messages in 10s...");
+                // കണക്ട് ആയി 15 സെക്കൻഡ് കഴിഞ്ഞ ശേഷമുള്ള പുതിയ മെസ്സേജുകൾ മാത്രം സ്വീകരിക്കാൻ
+                readyToProcessAt = Math.floor(Date.now() / 1000) + 15;
+                console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
             } else if (connection === "close") {
                 isConnecting = false;
                 readyToProcessAt = Infinity;
@@ -153,7 +159,8 @@ async function startBot() {
                 if (statusCode === DisconnectReason.loggedOut) {
                     console.log("❌ Logged out! Please generate a new SESSION_ID.");
                 } else if (statusCode === 440) {
-                    await delay(10000);
+                    console.log("⚠️ Conflict (440): Another instance is using this session! Waiting 20s...");
+                    await delay(20000);
                     startBot();
                 } else {
                     await delay(5000);
@@ -166,15 +173,13 @@ async function startBot() {
             if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
-            // റീസ്റ്റാർട്ട് സമയത്തെ 10 സെക്കൻഡ് ഓഫ്‌ലൈൻ സിങ്ക് ക്യൂ പൂർണ്ണമായും ഒഴിവാക്കാൻ
             if (nowSec < readyToProcessAt) return;
 
             for (const msg of chatUpdate.messages || []) {
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
-                // ബോട്ട് ഓൺലൈൻ ആകുന്നതിന് മുമ്പുള്ള പഴയ മെസ്സേജുകൾ പൂർണ്ണമായും ഒഴിവാക്കാൻ
                 const msgTime = Number(msg.messageTimestamp || 0);
-                if (msgTime && msgTime < readyToProcessAt - 10) continue;
+                if (msgTime && msgTime < readyToProcessAt - 15) continue;
 
                 if (processedMsgs.has(msg.key.id)) continue;
                 processedMsgs.add(msg.key.id);
@@ -240,7 +245,6 @@ async function startBot() {
                     }
                 }
 
-                // പ്രിഫിക്സ് (.) ഉള്ള കമാൻഡുകൾക്ക് മാത്രം മറുപടി നൽകാൻ
                 const trimmed = body.trim();
                 if (!trimmed || !trimmed.startsWith(PREFIX)) continue;
 
