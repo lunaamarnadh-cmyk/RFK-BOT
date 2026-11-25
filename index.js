@@ -21,7 +21,6 @@ http.createServer((req, res) => {
     res.end("RFK-BOT is Alive & Running!");
 }).listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`));
 
-// സെർവർ ഉറങ്ങിപ്പോകാതിരിക്കാൻ Self-Ping Keep-Alive (Render/Railway)
 const APP_URL = process.env.RENDER_EXTERNAL_URL || process.env.RAILWAY_STATIC_URL || `http://localhost:${PORT}`;
 setInterval(() => {
     const targetUrl = APP_URL.startsWith("http") ? APP_URL : `https://${APP_URL}`;
@@ -29,6 +28,7 @@ setInterval(() => {
 }, 4 * 60 * 1000);
 
 const SESSION_DIR = path.join(__dirname, "session");
+const PROCESSED_FILE = path.join(__dirname, "processed.json");
 const PREFIX = process.env.PREFIX || ".";
 const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
 const MODE = (process.env.MODE || "public").toLowerCase();
@@ -36,6 +36,26 @@ const SUPER_OWNERS = ["917907228818"];
 
 const commands = new Map();
 const eventPlugins = [];
+
+// റീസ്റ്റാർട്ട് ആയാലും മായാത്ത വിധം പ്രോസസ്സ് ചെയ്ത മെസ്സേജ് ഐഡികൾ സേവ് ചെയ്യാൻ
+let processedList = [];
+if (fs.existsSync(PROCESSED_FILE)) {
+    try {
+        processedList = JSON.parse(fs.readFileSync(PROCESSED_FILE, "utf8"));
+    } catch {}
+}
+const processedMsgs = new Set(processedList);
+
+function markProcessed(id) {
+    processedMsgs.add(id);
+    if (processedMsgs.size > 1000) {
+        const first = processedMsgs.values().next().value;
+        processedMsgs.delete(first);
+    }
+    try {
+        fs.writeFileSync(PROCESSED_FILE, JSON.stringify([...processedMsgs]));
+    } catch {}
+}
 
 function loadPlugins() {
     commands.clear();
@@ -68,9 +88,14 @@ function loadPlugins() {
 
 async function restoreSession() {
     const sessionEnv = process.env.SESSION_ID;
-    if (fs.existsSync(SESSION_DIR)) {
-        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+    const credsPath = path.join(SESSION_DIR, "creds.json");
+
+    // നിലവിലുള്ള സെഷൻ കീകൾ നശിപ്പിക്കാതെ, creds.json ഇല്ലെങ്കിൽ മാത്രം റീസ്റ്റോർ ചെയ്യുക
+    if (fs.existsSync(credsPath)) {
+        console.log("✅ Existing session folder found, keeping encryption keys intact.");
+        return;
     }
+
     fs.mkdirSync(SESSION_DIR, { recursive: true });
 
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
@@ -86,14 +111,14 @@ async function restoreSession() {
                     const { data } = await axios.get(`https://dpaste.com/${rawData}.txt`);
                     credsContent = typeof data === "string" ? data : JSON.stringify(data);
                 }
-                fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsContent);
+                fs.writeFileSync(credsPath, credsContent);
                 console.log("✅ Short Session restored cleanly!");
             } catch (err) {
                 console.error("❌ Failed to restore Short Session:", err.message);
             }
         } else {
             const credsBuffer = Buffer.from(rawData, "base64");
-            fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
+            fs.writeFileSync(credsPath, credsBuffer);
             console.log("✅ Base64 Session restored cleanly!");
         }
     }
@@ -102,7 +127,6 @@ async function restoreSession() {
 let isConnecting = false;
 let readyToProcessAt = Infinity;
 const startTime = Date.now();
-const processedMsgs = new Set();
 
 function formatUptime(ms) {
     const sec = Math.floor((ms / 1000) % 60);
@@ -147,7 +171,6 @@ async function startBot() {
 
             if (connection === "open") {
                 isConnecting = false;
-                // കണക്ട് ആയി 15 സെക്കൻഡ് കഴിഞ്ഞ ശേഷമുള്ള പുതിയ മെസ്സേജുകൾ മാത്രം സ്വീകരിക്കാൻ
                 readyToProcessAt = Math.floor(Date.now() / 1000) + 15;
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
             } else if (connection === "close") {
@@ -159,7 +182,7 @@ async function startBot() {
                 if (statusCode === DisconnectReason.loggedOut) {
                     console.log("❌ Logged out! Please generate a new SESSION_ID.");
                 } else if (statusCode === 440) {
-                    console.log("⚠️ Conflict (440): Another instance is using this session! Waiting 20s...");
+                    console.log("⚠️ Conflict (440): Waiting 20s...");
                     await delay(20000);
                     startBot();
                 } else {
@@ -173,17 +196,29 @@ async function startBot() {
             if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
-            if (nowSec < readyToProcessAt) return;
 
             for (const msg of chatUpdate.messages || []) {
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
-                const msgTime = Number(msg.messageTimestamp || 0);
-                if (msgTime && msgTime < readyToProcessAt - 15) continue;
+                // പ്രോട്ടോക്കോൾ / സിസ്റ്റം സിങ്ക് മെസ്സേജുകൾ ഒഴിവാക്കാൻ
+                if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
 
+                // ഒരിക്കൽ പ്രോസസ്സ് ചെയ്ത മെസ്സേജ് ആണെങ്കിൽ ഉടൻ ഒഴിവാക്കുക
                 if (processedMsgs.has(msg.key.id)) continue;
-                processedMsgs.add(msg.key.id);
-                setTimeout(() => processedMsgs.delete(msg.key.id), 900000);
+
+                // റീസ്റ്റാർട്ട് സമയത്തെ ആദ്യ 15 സെക്കൻഡിൽ വരുന്ന പഴയ മെസ്സേജുകൾ മാർക്ക് ചെയ്ത് ഒഴിവാക്കാൻ
+                if (nowSec < readyToProcessAt) {
+                    markProcessed(msg.key.id);
+                    continue;
+                }
+
+                const msgTime = Number(msg.messageTimestamp || 0);
+                if (msgTime && msgTime < readyToProcessAt - 15) {
+                    markProcessed(msg.key.id);
+                    continue;
+                }
+
+                markProcessed(msg.key.id);
 
                 const jid = msg.key.remoteJid;
                 if (!jid) continue;
