@@ -1,4 +1,3 @@
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -12,6 +11,7 @@ const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const axios = require("axios");
 
 const PORT = process.env.PORT || 8000;
 
@@ -65,10 +65,25 @@ async function restoreSession() {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
 
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
-        const base64Data = sessionEnv.replace("RFK-BOT~", "").trim();
-        const credsBuffer = Buffer.from(base64Data, "base64");
-        fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
-        console.log("✅ Session restored cleanly from SESSION_ID!");
+        const rawData = sessionEnv.replace("RFK-BOT~", "").trim();
+
+        // 1. Short Session ID (e.g., RFK-BOT~ABCD1234)
+        if (rawData.length < 25) {
+            try {
+                const { data } = await axios.get(`https://dpaste.com/${rawData}.txt`);
+                const credsContent = typeof data === "string" ? data : JSON.stringify(data);
+                fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsContent);
+                console.log("✅ Short Session restored cleanly from SESSION_ID!");
+            } catch (err) {
+                console.error("❌ Failed to restore Short Session:", err.message);
+            }
+        } 
+        // 2. Old Long Base64 Session ID
+        else {
+            const credsBuffer = Buffer.from(rawData, "base64");
+            fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsBuffer);
+            console.log("✅ Base64 Session restored cleanly from SESSION_ID!");
+        }
     }
 }
 
@@ -197,7 +212,7 @@ async function startBot() {
                     }
                 }
 
-                // Prefix-less + Prefix Support (ഡോട്ട് ഇട്ടാലും ഇല്ലെങ്കിലും വർക്ക് ആകും)
+                // Prefix-less + Prefix Support
                 const trimmed = body.trim();
                 if (!trimmed) continue;
 
