@@ -54,3 +54,14 @@ git clone [https://github.com/lunaamarnadh-cmyk/RFK-BOT](https://github.com/luna
 cd RFK-BOT
 npm install
 npm start
+```
+
+---
+
+## 👨‍💻 Developer & Support
+
+- **Developer:** **RFK MODS**
+- **YouTube:** [@rfkmod4333](https://youtube.com/@rfkmod4333)
+- **GitHub:** [RFK-BOT](https://github.com/lunaamarnadh-cmyk/RFK-BOT)
+
+> ⚠️ *Disclaimer: This bot is created for educational and personal automation purposes. Use responsibly.*
