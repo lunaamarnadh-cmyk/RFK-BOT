@@ -10,6 +10,9 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const YTDLP_PATH = "/tmp/yt-dlp";
 const COOKIE_FILE = "/tmp/ig_cookies.txt";
 
+// Fresh sessionid configured
+const DEFAULT_SESSION_ID = "51476036011%3Ata0MM4GaNSuNAl%3A27%3AAYlcHJUN1WdLpQmL8X1df5-iarxrZZhgmqu42Jt6hg";
+
 async function fetchBuffer(url) {
     const res = await axios.get(url, {
         responseType: "arraybuffer",
@@ -19,7 +22,6 @@ async function fetchBuffer(url) {
     return Buffer.from(res.data);
 }
 
-// Auto-download yt-dlp binary if not present
 async function ensureYtDlp() {
     if (fs.existsSync(YTDLP_PATH)) return YTDLP_PATH;
     const binUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
@@ -29,9 +31,10 @@ async function ensureYtDlp() {
     return YTDLP_PATH;
 }
 
-// Create Netscape cookie file for yt-dlp from sessionid
 function writeCookieFile() {
-    const rawCookie = (process.env.IG_COOKIE || "sessionid=51476036011%3AMYbtaqpKPGa9Zs%3A2%3AAYmIznW-I_7-zSt6MZwN49aWQEjDmHLnQZa4zMx6vg;").trim();
+    const rawCookie = (process.env.IG_COOKIE || DEFAULT_SESSION_ID).trim();
+    if (!rawCookie || rawCookie === "NEW_SESSION_ID_HERE") return null;
+
     const match = rawCookie.match(/sessionid=([^;]+)/);
     const sessionVal = match ? match[1] : rawCookie.replace(/;/g, "");
 
@@ -60,45 +63,54 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
-async function downloadWithYtDlp(url) {
+async function runYtDlp(url, useCookies = true) {
     const ytdlp = await ensureYtDlp();
-    const cookies = writeCookieFile();
-    const outTemplate = `/tmp/ig_${Date.now()}.%(ext)s`;
+    const cookies = useCookies ? writeCookieFile() : null;
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const outTemplate = `/tmp/ig_${id}.%(ext)s`;
     const expectedMp4 = outTemplate.replace("%(ext)s", "mp4");
 
-    try {
-        // Force best video + best audio merged into mp4 using server's ffmpeg
-        const cmd = `"${ytdlp}" --cookies "${cookies}" -f "bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
-        await execPromise(cmd, { timeout: 60000 });
+    const cookieFlag = cookies ? `--cookies "${cookies}"` : "";
+    const cmd = `"${ytdlp}" ${cookieFlag} -f "bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
 
-        if (fs.existsSync(expectedMp4)) {
-            const buf = fs.readFileSync(expectedMp4);
-            fs.unlinkSync(expectedMp4);
-            return { type: "video", buffer: buf, source: "yt-dlp + FFmpeg (HD Audio)" };
-        }
+    await execPromise(cmd, { timeout: 60000 });
 
-        // Check if it downloaded an image or differently named file
-        const basePrefix = path.basename(outTemplate).split(".")[0];
-        const files = fs.readdirSync("/tmp").filter(f => f.startsWith(basePrefix));
-        if (files.length > 0) {
-            const fullPath = path.join("/tmp", files[0]);
-            const buf = fs.readFileSync(fullPath);
-            const isImg = /\.(jpg|jpeg|png|webp)$/i.test(files[0]);
-            fs.unlinkSync(fullPath);
-            return { type: isImg ? "image" : "video", buffer: buf, source: "yt-dlp" };
-        }
-        throw new Error("Output file not created");
-    } catch (e) {
-        throw new Error(e.stderr || e.message);
+    if (fs.existsSync(expectedMp4)) {
+        const buf = fs.readFileSync(expectedMp4);
+        fs.unlinkSync(expectedMp4);
+        return { type: "video", buffer: buf, source: cookies ? "yt-dlp (Cookie + Audio)" : "yt-dlp (Public + Audio)" };
     }
+
+    const basePrefix = `ig_${id}.`;
+    const files = fs.readdirSync("/tmp").filter(f => f.startsWith(basePrefix));
+    if (files.length > 0) {
+        const fullPath = path.join("/tmp", files[0]);
+        const buf = fs.readFileSync(fullPath);
+        const isImg = /\.(jpg|jpeg|png|webp)$/i.test(files[0]);
+        fs.unlinkSync(fullPath);
+        return { type: isImg ? "image" : "video", buffer: buf, source: "yt-dlp" };
+    }
+    throw new Error("Output file not created");
 }
 
 async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    // Primary: yt-dlp with sessionid cookie + FFmpeg auto-merge
-    return await downloadWithYtDlp(url);
+    // 1. Try yt-dlp WITH cookies
+    try {
+        return await runYtDlp(url, true);
+    } catch (err1) {
+        // 2. If 401 Unauthorized (cookie expired), retry WITHOUT cookies for public reels
+        try {
+            return await runYtDlp(url, false);
+        } catch (err2) {
+            if (err1.message.includes("401")) {
+                throw new Error("Instagram sessionid കാലാവധി കഴിഞ്ഞു (401 Unauthorized). പുതിയ sessionid അപ്‌ഡേറ്റ് ചെയ്യുക.");
+            }
+            throw new Error(err2.stderr || err2.message);
+        }
+    }
 }
 
 async function getFbMedia(url) {
