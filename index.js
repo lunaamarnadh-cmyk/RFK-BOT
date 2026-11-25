@@ -70,8 +70,14 @@ async function restoreSession() {
         // 1. Short Session ID (e.g., RFK-BOT~ABCD1234)
         if (rawData.length < 25) {
             try {
-                const { data } = await axios.get(`https://dpaste.com/${rawData}.txt`);
-                const credsContent = typeof data === "string" ? data : JSON.stringify(data);
+                let credsContent;
+                try {
+                    const { data } = await axios.get(`https://paste.rs/${rawData}`);
+                    credsContent = typeof data === "string" ? data : JSON.stringify(data);
+                } catch {
+                    const { data } = await axios.get(`https://dpaste.com/${rawData}.txt`);
+                    credsContent = typeof data === "string" ? data : JSON.stringify(data);
+                }
                 fs.writeFileSync(path.join(SESSION_DIR, "creds.json"), credsContent);
                 console.log("✅ Short Session restored cleanly from SESSION_ID!");
             } catch (err) {
@@ -148,17 +154,24 @@ async function startBot() {
         });
 
         sock.ev.on("messages.upsert", async (chatUpdate) => {
+            // പഴയ ഹിസ്റ്ററി മെസ്സേജുകൾ (append) ഒഴിവാക്കി പുതിയ ലൈവ് മെസ്സേജുകൾ (notify) മാത്രം എടുക്കാൻ
+            if (chatUpdate.type !== "notify") return;
+
             for (const msg of chatUpdate.messages || []) {
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
+                // 2 മിനിറ്റിൽ കൂടുതൽ പഴക്കമുള്ള മെസ്സേജുകൾ ഒഴിവാക്കാൻ (Restart loop തടയാൻ)
+                const msgTime = Number(msg.messageTimestamp || 0);
+                if (msgTime && Math.floor(Date.now() / 1000) - msgTime > 120) continue;
+
                 if (processedMsgs.has(msg.key.id)) continue;
                 processedMsgs.add(msg.key.id);
-                setTimeout(() => processedMsgs.delete(msg.key.id), 60000);
+                setTimeout(() => processedMsgs.delete(msg.key.id), 300000);
 
                 const jid = msg.key.remoteJid;
                 if (!jid) continue;
 
-                // Auto Status View Handler
+                // Auto Status View & Save Handler
                 if (jid === "status@broadcast") {
                     for (const evPlugin of eventPlugins) {
                         if (evPlugin.on === "status") {
