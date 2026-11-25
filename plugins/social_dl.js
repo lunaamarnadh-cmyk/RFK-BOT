@@ -1,107 +1,169 @@
 
 const axios = require("axios");
 
-// Instagram Direct Embed / GraphQL Scraper (Works on Cloud Servers without API blocks)
-async function scrapeInstagramDirect(url) {
-    try {
-        const cleanUrl = url.split("?")[0].replace(/\/$/, "");
-        const match = cleanUrl.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
-        if (!match) return null;
-        const shortcode = match[2];
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-        const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
-        const { data: html } = await axios.get(embedUrl, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5"
-            },
-            timeout: 15000
-        });
-
-        const videoMatch = html.match(/"video_url":"([^"]+)"/);
-        if (videoMatch && videoMatch[1]) {
-            return videoMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "");
-        }
-
-        const displayMatch = html.match(/"display_url":"([^"]+)"/);
-        if (displayMatch && displayMatch[1]) {
-            return displayMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "");
-        }
-    } catch {
-        return null;
-    }
-    return null;
+// Helper to download media as Buffer so WhatsApp/Baileys never fails with 403
+async function downloadBuffer(mediaUrl) {
+    const res = await axios.get(mediaUrl, {
+        responseType: "arraybuffer",
+        headers: {
+            "User-Agent": UA,
+            "Accept": "*/*",
+            "Referer": "https://www.instagram.com/"
+        },
+        timeout: 30000
+    });
+    return Buffer.from(res.data);
 }
 
-async function fetchMedia(url, platform) {
-    if (platform === "insta") {
-        // Method 1: Direct Instagram Embed Scraper
-        const directUrl = await scrapeInstagramDirect(url);
-        if (directUrl) return directUrl;
+// 1. Instagram Multi-Method Downloader
+async function getInstaMedia(url) {
+    const cleanUrl = url.split("?")[0].trim();
 
-        // Method 2: Backup APIs
-        const instaApis = [
-            async () => {
-                const res = await axios.get(`https://api.vreden.my.id/api/igdownload?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                const data = res.data?.result?.data || res.data?.result;
-                if (Array.isArray(data) && data.length > 0) return data[0].url || data[0].download_link;
-                return null;
-            },
-            async () => {
-                const res = await axios.get(`https://api.davidcyriltech.my.id/instagram?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                return res.data?.downloadUrl || res.data?.result?.[0]?.url || null;
-            },
-            async () => {
-                const res = await axios.get(`https://bk9.fun/download/instagram?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                const data = res.data?.BK9;
-                if (Array.isArray(data) && data.length > 0) return data[0].url;
-                return null;
-            }
-        ];
+    const methods = [
+        // Method 1: GiftedTech API
+        async () => {
+            const res = await axios.get(`https://api.giftedtech.web.id/api/download/instadl?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const r = res.data?.result;
+            if (Array.isArray(r) && r[0]?.download_url) return r[0].download_url;
+            if (r?.download_url) return r.download_url;
+            return null;
+        },
+        // Method 2: Dark-Yasiya API
+        async () => {
+            const res = await axios.get(`https://www.dark-yasiya-api.site/download/ig?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const data = res.data?.result?.data;
+            if (Array.isArray(data) && data[0]?.url) return data[0].url;
+            return null;
+        },
+        // Method 3: NexOracle API
+        async () => {
+            const res = await axios.get(`https://api.nexoracle.com/downloader/insta?apikey=free_key@maher_apis&url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const r = res.data?.result;
+            if (Array.isArray(r) && r[0]?.url) return r[0].url;
+            if (r?.url) return r.url;
+            return null;
+        },
+        // Method 4: SaveIG / V3 HTML Form Scraper
+        async () => {
+            const form = new URLSearchParams();
+            form.append("q", cleanUrl);
+            form.append("t", "media");
+            form.append("lang", "en");
 
-        for (const api of instaApis) {
-            try {
-                const videoUrl = await api();
-                if (videoUrl) return videoUrl;
-            } catch {
-                continue;
-            }
+            const res = await axios.post("https://v3.saveig.app/api/ajaxSearch", form.toString(), {
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "User-Agent": UA,
+                    "Origin": "https://saveig.app",
+                    "Referer": "https://saveig.app/"
+                },
+                timeout: 15000
+            });
+
+            const html = res.data?.data || "";
+            const match = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Video"/i) ||
+                          html.match(/href="(https:\/\/d\.rapidcdn\.app[^"]+)"/i) ||
+                          html.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i);
+            return match ? match[1].replace(/&amp;/g, "&") : null;
+        },
+        // Method 5: FastDL / SnapInsta Form Scraper
+        async () => {
+            const form = new URLSearchParams();
+            form.append("url", cleanUrl);
+            form.append("action", "post");
+
+            const res = await axios.post("https://indown.io/download", form.toString(), {
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": UA,
+                    "Referer": "https://indown.io/"
+                },
+                timeout: 15000
+            });
+
+            const html = res.data || "";
+            const match = html.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i);
+            return match ? match[1].replace(/&amp;/g, "&") : null;
         }
-        throw new Error("വീഡിയോ ലിങ്ക് ലഭ്യമല്ല. അക്കൗണ്ട് Private അല്ലെന്ന് ഉറപ്പുവരുത്തുക.");
-    } else {
-        // Facebook APIs
-        const fbApis = [
-            async () => {
-                const res = await axios.get(`https://api.davidcyriltech.my.id/facebook?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                return res.data?.video?.hd || res.data?.video?.sd || res.data?.result?.hd || null;
-            },
-            async () => {
-                const res = await axios.get(`https://bk9.fun/download/fb?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                return res.data?.BK9?.hd || res.data?.BK9?.sd || null;
-            },
-            async () => {
-                const res = await axios.get(`https://api.vreden.my.id/api/fbdl?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                return res.data?.result?.hd || res.data?.result?.sd || null;
-            }
-        ];
+    ];
 
-        for (const api of fbApis) {
-            try {
-                const videoUrl = await api();
-                if (videoUrl) return videoUrl;
-            } catch {
-                continue;
+    let lastErr = "No response";
+    for (let i = 0; i < methods.length; i++) {
+        try {
+            const link = await methods[i]();
+            if (link && link.startsWith("http")) {
+                console.log(`[Insta] Success via Method ${i + 1}`);
+                return link;
             }
+        } catch (e) {
+            lastErr = e.message;
         }
-        throw new Error("Facebook വീഡിയോ ഡൗൺലോഡ് ചെയ്യാൻ സാധിച്ചില്ല, ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പുവരുത്തുക.");
     }
+    throw new Error(`ഡൗൺലോഡ് പരാജയപ്പെട്ടു (${lastErr}). അല്പം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കുക.`);
+}
+
+// 2. Facebook Multi-Method Downloader
+async function getFbMedia(url) {
+    const cleanUrl = url.trim();
+
+    const methods = [
+        // Method 1: GiftedTech FB API
+        async () => {
+            const res = await axios.get(`https://api.giftedtech.web.id/api/download/fbdl?apikey=gifted&url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const r = res.data?.result;
+            return r?.hd_video || r?.sd_video || r?.url || null;
+        },
+        // Method 2: Dark-Yasiya FB API
+        async () => {
+            const res = await axios.get(`https://www.dark-yasiya-api.site/download/fb?url=${encodeURIComponent(cleanUrl)}`, { timeout: 15000 });
+            const r = res.data?.result;
+            return r?.hd || r?.sd || null;
+        },
+        // Method 3: FSave Form Scraper
+        async () => {
+            const form = new URLSearchParams();
+            form.append("q", cleanUrl);
+            form.append("vt", "home");
+
+            const res = await axios.post("https://fsave.io/api/ajaxSearch", form.toString(), {
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "User-Agent": UA,
+                    "Origin": "https://fsave.io",
+                    "Referer": "https://fsave.io/"
+                },
+                timeout: 15000
+            });
+
+            const html = res.data?.data || "";
+            const match = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download 720p/i) ||
+                          html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download 360p/i) ||
+                          html.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i);
+            return match ? match[1].replace(/&amp;/g, "&") : null;
+        }
+    ];
+
+    let lastErr = "No response";
+    for (let i = 0; i < methods.length; i++) {
+        try {
+            const link = await methods[i]();
+            if (link && link.startsWith("http")) {
+                console.log(`[FB] Success via Method ${i + 1}`);
+                return link;
+            }
+        } catch (e) {
+            lastErr = e.message;
+        }
+    }
+    throw new Error(`Facebook വീഡിയോ ലഭിച്ചില്ല (${lastErr}).`);
 }
 
 module.exports = [
     {
         pattern: "insta",
-        alias: ["ig", "instagram", "reels"],
+        alias: ["ig", "instagram", "reels", "reel"],
         type: "downloader",
         async execute({ sock, msg, jid, text, reply }) {
             const url = text?.trim();
@@ -111,13 +173,14 @@ module.exports = [
 
             try {
                 await reply("⏳ *Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await fetchMedia(url, "insta");
+                const mediaUrl = await getInstaMedia(url);
+                const buffer = await downloadBuffer(mediaUrl);
 
                 const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
                 if (isImage) {
-                    await sock.sendMessage(jid, { image: { url: mediaUrl }, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                    await sock.sendMessage(jid, { image: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, { video: { url: mediaUrl }, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
+                    await sock.sendMessage(jid, { video: buffer, caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*" }, { quoted: msg });
                 }
             } catch (err) {
                 console.error("Insta Error:", err.message);
@@ -137,12 +200,13 @@ module.exports = [
 
             try {
                 await reply("⏳ *Facebook വീഡിയോ ഡൗൺലോഡ് ചെയ്യുന്നു...*");
-                const mediaUrl = await fetchMedia(url, "fb");
+                const mediaUrl = await getFbMedia(url);
+                const buffer = await downloadBuffer(mediaUrl);
 
                 await sock.sendMessage(
                     jid,
                     {
-                        video: { url: mediaUrl },
+                        video: buffer,
                         caption: "✅ *Downloaded by 乂 𝐑𝐅𝐊 𝐁𝐎𝐓 乂*"
                     },
                     { quoted: msg }
