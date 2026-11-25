@@ -32,7 +32,7 @@ function shortcodeToMediaId(shortcode) {
     return mediaId.toString();
 }
 
-// Primary: Instagram API with Audio+Video DASH Merge
+// Primary: Instagram API with Universal Audio Extraction
 async function getInstaMedia(url) {
     const shortcode = extractShortcode(url);
     if (!shortcode) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
@@ -54,22 +54,39 @@ async function getInstaMedia(url) {
             if (item) {
                 const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
 
-                // DASH Audio + Video Merge (Fixes No-Sound Reels)
-                if (mediaObj.video_dash_manifest && mediaObj.video_versions?.length > 0) {
-                    const manifest = mediaObj.video_dash_manifest;
-                    const audioMatch = manifest.match(/<AdaptationSet[^>]*contentType="audio"[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i) ||
-                                       manifest.match(/<Representation[^>]*mimeType="audio\/mp4"[\s\S]*?<BaseURL>([^<]+)<\/BaseURL>/i);
+                if (mediaObj.video_versions?.length > 0) {
+                    const videoUrl = mediaObj.video_versions[0].url;
+                    let audioUrl = null;
 
-                    if (audioMatch?.[1]) {
-                        const audioUrl = audioMatch[1].replace(/&amp;/g, "&");
-                        const videoUrl = mediaObj.video_versions[0].url;
+                    // Method 1: Check direct audio_versions array
+                    if (mediaObj.audio_versions?.length > 0) {
+                        audioUrl = mediaObj.audio_versions[0].url;
+                    }
+
+                    // Method 2: Check DASH manifest XML (All patterns)
+                    if (!audioUrl && mediaObj.video_dash_manifest) {
+                        const manifest = mediaObj.video_dash_manifest;
+                        const audioBlock = manifest.match(/<AdaptationSet[^>]*?(?:contentType="audio"|mimeType="audio\/[^"]*")[\s\S]*?<\/AdaptationSet>/i);
+                        if (audioBlock) {
+                            const baseUrlMatch = audioBlock[0].match(/<BaseURL>([^<]+)<\/BaseURL>/i);
+                            if (baseUrlMatch?.[1]) {
+                                audioUrl = baseUrlMatch[1].replace(/&amp;/g, "&");
+                            }
+                        }
+                    }
+
+                    // Method 3: Check music_metadata / original_sound_info progressive URL
+                    if (!audioUrl) {
+                        audioUrl = item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
+                                   item.clips_metadata?.original_sound_info?.progressive_download_url || null;
+                    }
+
+                    if (audioUrl) {
                         return { type: "dash", videoUrl, audioUrl };
                     }
+                    return { type: "video", url: videoUrl };
                 }
 
-                if (mediaObj.video_versions?.length > 0) {
-                    return { type: "video", url: mediaObj.video_versions[0].url };
-                }
                 if (mediaObj.image_versions2?.candidates?.length > 0) {
                     return { type: "image", url: mediaObj.image_versions2.candidates[0].url };
                 }
@@ -111,9 +128,8 @@ async function mergeVideoAudio(videoUrl, audioUrl) {
         fs.writeFileSync(vPath, vBuf);
         fs.writeFileSync(aPath, aBuf);
 
-        await execPromise(`ffmpeg -y -i "${vPath}" -i "${aPath}" -c:v copy -c:a aac -shortest "${outPath}"`);
-        const finalBuffer = fs.readFileSync(outPath);
-        return finalBuffer;
+        await execPromise(`ffmpeg -y -i "${vPath}" -i "${aPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest "${outPath}"`);
+        return fs.readFileSync(outPath);
     } finally {
         [vPath, aPath, outPath].forEach(f => {
             if (fs.existsSync(f)) fs.unlinkSync(f);
