@@ -62,16 +62,25 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
-// Re-encode to WhatsApp-compatible H.264 + AAC MP4
+async function fileHasAudio(filePath) {
+    try {
+        const { stdout } = await execPromise(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${filePath}"`);
+        return stdout.trim().includes("audio");
+    } catch {
+        return false;
+    }
+}
+
 async function makeWhatsAppCompatible(inputPath) {
-    const fixedPath = inputPath.replace(/\.mp4$/, "_wa.mp4");
+    const fixedPath = inputPath.replace(/\.[^.]+$/, "_wa.mp4");
     try {
         await execPromise(
             `ffmpeg -y -i "${inputPath}" -c:v libx264 -preset ultrafast -crf 24 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "${fixedPath}"`,
             { timeout: 60000 }
         );
+        const hasAudio = await fileHasAudio(fixedPath);
         const buf = fs.readFileSync(fixedPath);
-        return buf;
+        return { buffer: buf, hasAudio };
     } finally {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         if (fs.existsSync(fixedPath)) fs.unlinkSync(fixedPath);
@@ -83,18 +92,12 @@ async function runYtDlp(url, useCookies = true) {
     const cookies = useCookies ? writeCookieFile() : null;
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const outTemplate = `/tmp/ig_${id}.%(ext)s`;
-    const expectedMp4 = outTemplate.replace("%(ext)s", "mp4");
 
     const cookieFlag = cookies ? `--cookies "${cookies}"` : "";
-    // Prefer H.264 (avc1) + m4a first, fallback to best video+audio
-    const cmd = `"${ytdlp}" ${cookieFlag} -f "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
+    // Strictly prioritize formats WITH audio (acodec!=none), or merge bestvideo+bestaudio
+    const cmd = `"${ytdlp}" ${cookieFlag} -f "b[acodec!=none]/bv*+ba[acodec!=none]/bv*+ba/b" --merge-output-format mp4 --no-warnings -o "${outTemplate}" "${url}"`;
 
     await execPromise(cmd, { timeout: 60000 });
-
-    if (fs.existsSync(expectedMp4)) {
-        const buf = await makeWhatsAppCompatible(expectedMp4);
-        return { type: "video", buffer: buf, source: cookies ? "yt-dlp (H.264 + Audio)" : "yt-dlp (Public + Audio)" };
-    }
 
     const basePrefix = `ig_${id}.`;
     const files = fs.readdirSync("/tmp").filter(f => f.startsWith(basePrefix));
@@ -104,10 +107,15 @@ async function runYtDlp(url, useCookies = true) {
         if (isImg) {
             const buf = fs.readFileSync(fullPath);
             fs.unlinkSync(fullPath);
-            return { type: "image", buffer: buf, source: "yt-dlp" };
+            return { type: "image", buffer: buf, source: "yt-dlp Image" };
         }
-        const buf = await makeWhatsAppCompatible(fullPath);
-        return { type: "video", buffer: buf, source: "yt-dlp (H.264 + Audio)" };
+        const { buffer, hasAudio } = await makeWhatsAppCompatible(fullPath);
+        return {
+            type: "video",
+            buffer,
+            hasAudio,
+            source: hasAudio ? "yt-dlp (Audio Verified ✅)" : "yt-dlp (No Audio Stream)"
+        };
     }
     throw new Error("Output file not created");
 }
@@ -116,9 +124,20 @@ async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
+    // 1. Try WITH cookies
     try {
-        return await runYtDlp(url, true);
+        const res = await runYtDlp(url, true);
+        if (res.type === "image" || res.hasAudio) return res;
+
+        // If cookie download had NO audio, try WITHOUT cookies (public embed/web often gives muxed audio+video!)
+        try {
+            const pubRes = await runYtDlp(url, false);
+            if (pubRes.hasAudio) return pubRes;
+        } catch {}
+
+        return res;
     } catch (err1) {
+        // 2. Fallback WITHOUT cookies
         try {
             return await runYtDlp(url, false);
         } catch (err2) {
