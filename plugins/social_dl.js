@@ -76,115 +76,6 @@ function extractShortcode(url) {
     return match ? match[2] : null;
 }
 
-function shortcodeToMediaId(shortcode) {
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mediaId = BigInt(0);
-    for (let i = 0; i < shortcode.length; i++) {
-        mediaId = mediaId * BigInt(64) + BigInt(alphabet.indexOf(shortcode[i]));
-    }
-    return mediaId.toString();
-}
-
-// Recursively search any Instagram API JSON object for audio / music URLs
-function findAudioUrlInJson(obj) {
-    if (!obj || typeof obj !== "object") return null;
-
-    if (typeof obj.progressive_download_url === "string" && obj.progressive_download_url.startsWith("http")) {
-        return obj.progressive_download_url;
-    }
-    if (typeof obj.audio_url === "string" && obj.audio_url.startsWith("http")) {
-        return obj.audio_url;
-    }
-    if (typeof obj.video_dash_manifest === "string") {
-        const xml = obj.video_dash_manifest.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-        const sets = xml.match(/<AdaptationSet[\s\S]*?<\/AdaptationSet>/gi) || [];
-        for (const s of sets) {
-            if (/audio|mp4a/i.test(s)) {
-                const m = s.match(/<BaseURL>([^<]+)<\/BaseURL>/i);
-                if (m?.[1]) return m[1].trim();
-            }
-        }
-    }
-
-    for (const key of Object.keys(obj)) {
-        const val = obj[key];
-        if (val && typeof val === "object") {
-            const found = findAudioUrlInJson(val);
-            if (found) return found;
-        }
-    }
-    return null;
-}
-
-// Fetch separate music/audio track if reel video came without sound
-async function fetchSeparateAudioBuffer(url) {
-    const { sessionVal, userId } = getSessionInfo();
-    const cookieHeader = sessionVal ? `sessionid=${sessionVal}; ds_user_id=${userId};` : "";
-    const shortcode = extractShortcode(url);
-
-    // 1. Try yt-dlp audio-only extraction first
-    try {
-        const ytdlp = await ensureYtDlp();
-        const cookies = writeCookieFile();
-        const aId = `aud_${Date.now()}`;
-        const aOut = `/tmp/${aId}.%(ext)s`;
-        const cookieFlag = cookies ? `--cookies "${cookies}"` : "";
-        await execPromise(`"${ytdlp}" ${cookieFlag} -f "ba" --no-warnings -o "${aOut}" "${url}"`, { timeout: 30000 });
-        const files = fs.readdirSync("/tmp").filter(f => f.startsWith(`${aId}.`));
-        if (files.length > 0) {
-            const fPath = path.join("/tmp", files[0]);
-            const buf = fs.readFileSync(fPath);
-            fs.unlinkSync(fPath);
-            if (buf.length > 1000) return buf;
-        }
-    } catch {}
-
-    // 2. Try Mobile API JSON deep search for music_asset_info / progressive_download_url
-    if (shortcode && cookieHeader) {
-        try {
-            const mediaId = shortcodeToMediaId(shortcode);
-            const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
-                headers: {
-                    "User-Agent": "Instagram 317.0.0.34.109 Android (34/14; 420dpi; 1080x2400; samsung; SM-S918B; dm3q; qcom; en_US; 562236835)",
-                    "X-IG-App-ID": "936619743392459",
-                    "Cookie": cookieHeader
-                },
-                timeout: 15000
-            });
-            const audioUrl = findAudioUrlInJson(res.data);
-            if (audioUrl) return await fetchBuffer(audioUrl);
-        } catch {}
-    }
-
-    // 3. Try GraphQL JSON deep search
-    if (shortcode) {
-        try {
-            const gqlRes = await axios.post(
-                "https://www.instagram.com/api/graphql",
-                new URLSearchParams({
-                    variables: JSON.stringify({ shortcode }),
-                    doc_id: "10015901848480474",
-                    lsd: "AVqbxe3J_YA"
-                }).toString(),
-                {
-                    headers: {
-                        "User-Agent": UA,
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "X-IG-App-ID": "936619743392459",
-                        "X-FB-LSD": "AVqbxe3J_YA",
-                        "Cookie": cookieHeader
-                    },
-                    timeout: 15000
-                }
-            );
-            const audioUrl = findAudioUrlInJson(gqlRes.data);
-            if (audioUrl) return await fetchBuffer(audioUrl);
-        } catch {}
-    }
-
-    return null;
-}
-
 async function fileHasAudio(filePath) {
     try {
         const { stdout } = await execPromise(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${filePath}"`);
@@ -194,6 +85,58 @@ async function fileHasAudio(filePath) {
     }
 }
 
+// Residential Proxy APIs fallback for Copyrighted/Licensed Music Reels
+async function fetchViaExternalProxyApi(url) {
+    // 1. Try SnapSave / RapidAPI style public scraper (indown / saveig)
+    try {
+        const res = await axios.post(
+            "https://saveig.app/api/ajaxSearch",
+            new URLSearchParams({ q: url, t: "media", lang: "en" }).toString(),
+            {
+                headers: {
+                    "User-Agent": UA,
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Origin": "https://saveig.app",
+                    "Referer": "https://saveig.app/en",
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                timeout: 15000
+            }
+        );
+        const html = res.data?.data || "";
+        const match = html.match(/href="(https:\/\/[^"]+)"[^>]*title="Download Video"/i) ||
+                      html.match(/href="(https:\/\/d\.rapidcdn\.app[^"]+)"/i);
+        if (match?.[1]) {
+            const cleanUrl = match[1].replace(/&amp;/g, "&");
+            const buf = await fetchBuffer(cleanUrl);
+            if (buf.length > 50000) return { buffer: buf, source: "SaveIG Proxy (Audio ✅)" };
+        }
+    } catch {}
+
+    // 2. Try Instagram Web Embed / Page HTML `clips_music_attribution_info` or `video_url`
+    try {
+        const shortcode = extractShortcode(url);
+        if (shortcode) {
+            const res = await axios.get(`https://www.instagram.com/reel/${shortcode}/?__a=1&__d=dis`, {
+                headers: {
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                    "X-IG-App-ID": "936619743392459"
+                },
+                timeout: 15000
+            });
+            const jsonStr = JSON.stringify(res.data || {});
+            const progMatch = jsonStr.match(/"progressive_download_url":"(https:[^"]+)"/);
+            if (progMatch?.[1]) {
+                const audioUrl = progMatch[1].replace(/\\u0026/g, "&").replace(/\\\//g, "/");
+                const audioBuf = await fetchBuffer(audioUrl);
+                if (audioBuf.length > 10000) return { audioBuffer: audioBuf };
+            }
+        }
+    } catch {}
+
+    return null;
+}
+
 async function processVideoFile(inputPath, url) {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const fixedPath = `/tmp/wa_${id}.mp4`;
@@ -201,7 +144,6 @@ async function processVideoFile(inputPath, url) {
     const mergedPath = `/tmp/wa_mrg_${id}.mp4`;
 
     try {
-        // Convert to WhatsApp-compatible H.264 + AAC
         await execPromise(
             `ffmpeg -y -i "${inputPath}" -c:v libx264 -preset ultrafast -crf 24 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "${fixedPath}"`,
             { timeout: 60000 }
@@ -212,20 +154,23 @@ async function processVideoFile(inputPath, url) {
             return { buffer: fs.readFileSync(fixedPath), source: "yt-dlp (Audio Verified ✅)" };
         }
 
-        // Video has NO audio stream -> Fetch separate music/audio track and merge!
-        const audioBuf = await fetchSeparateAudioBuffer(url);
-        if (audioBuf) {
-            fs.writeFileSync(tempAudioPath, audioBuf);
+        // Video has NO audio -> Try External Proxy API for Licensed Music Reels
+        const proxyResult = await fetchViaExternalProxyApi(url);
+        if (proxyResult?.buffer) {
+            return proxyResult;
+        }
+        if (proxyResult?.audioBuffer) {
+            fs.writeFileSync(tempAudioPath, proxyResult.audioBuffer);
             await execPromise(
                 `ffmpeg -y -i "${fixedPath}" -i "${tempAudioPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 128k -shortest -movflags +faststart "${mergedPath}"`,
                 { timeout: 60000 }
             );
             if (fs.existsSync(mergedPath) && (await fileHasAudio(mergedPath))) {
-                return { buffer: fs.readFileSync(mergedPath), source: "yt-dlp + Music Track Merged ✅" };
+                return { buffer: fs.readFileSync(mergedPath), source: "yt-dlp + Web Music Merged ✅" };
             }
         }
 
-        return { buffer: fs.readFileSync(fixedPath), source: "yt-dlp (Original Silent Reel)" };
+        return { buffer: fs.readFileSync(fixedPath), source: "yt-dlp (Licensed Audio Blocked by IG)" };
     } finally {
         [inputPath, fixedPath, tempAudioPath, mergedPath].forEach(f => {
             if (fs.existsSync(f)) fs.unlinkSync(f);
