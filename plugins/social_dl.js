@@ -1,3 +1,4 @@
+
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -31,6 +32,20 @@ function shortcodeToMediaId(shortcode) {
     return mediaId.toString();
 }
 
+// Check if a video buffer actually has an audio stream using ffprobe/ffmpeg
+async function hasAudioTrack(buffer) {
+    const tempFile = path.join("/tmp", `chk_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
+    try {
+        fs.writeFileSync(tempFile, buffer);
+        const { stdout } = await execPromise(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${tempFile}"`);
+        return stdout.trim().includes("audio");
+    } catch {
+        return false;
+    } finally {
+        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+    }
+}
+
 function extractAudioFromDash(manifest) {
     if (!manifest) return null;
     const xml = manifest
@@ -46,7 +61,9 @@ function extractAudioFromDash(manifest) {
             if (urlMatch?.[1]) return urlMatch[1].trim();
         }
     }
-    return null;
+    // Fallback: Look for any mp4a / audio URL inside manifest
+    const mp4aMatch = xml.match(/https?:\/\/[^"<\s]+(?:mp4a|audio)[^"<\s]*/i);
+    return mp4aMatch ? mp4aMatch[0].trim() : null;
 }
 
 async function mergeVideoAudio(videoUrl, audioUrl) {
@@ -76,9 +93,8 @@ async function getInstaMedia(url) {
     const rawCookie = (process.env.IG_COOKIE || "sessionid=51476036011%3AMYbtaqpKPGa9Zs%3A2%3AAYmIznW-I_7-zSt6MZwN49aWQEjDmHLnQZa4zMx6vg;").trim();
     const cookieHeader = rawCookie.includes("sessionid=") ? rawCookie : `sessionid=${rawCookie};`;
     const mediaId = shortcodeToMediaId(shortcode);
-    const errors = [];
 
-    // 1. Try Mobile API + DASH Audio/Video Merge
+    // 1. Mobile API (Checks all video_versions for audio + DASH merge)
     try {
         const res = await axios.get(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
             headers: {
@@ -91,8 +107,9 @@ async function getInstaMedia(url) {
         const item = res.data?.items?.[0];
         if (item) {
             const mediaObj = item.video_versions ? item : (item.carousel_media?.[0] || item);
+
             if (mediaObj.video_versions?.length > 0) {
-                const videoUrl = mediaObj.video_versions[0].url;
+                // Step A: Try extracting separate audio & merging first (Highest Quality)
                 let audioUrl = mediaObj.audio_versions?.[0]?.url ||
                                extractAudioFromDash(mediaObj.video_dash_manifest) ||
                                item.clips_metadata?.music_info?.music_asset_info?.progressive_download_url ||
@@ -100,58 +117,37 @@ async function getInstaMedia(url) {
                                null;
 
                 if (audioUrl) {
-                    const buffer = await mergeVideoAudio(videoUrl, audioUrl);
-                    return { type: "video", buffer, source: "Mobile API + Audio Merge" };
+                    const buffer = await mergeVideoAudio(mediaObj.video_versions[0].url, audioUrl);
+                    return { type: "video", buffer, source: "Mobile API (Merged Audio)" };
                 }
-                const buffer = await fetchBuffer(videoUrl);
-                return { type: "video", buffer, source: "Mobile API (No separate audio found)" };
+
+                // Step B: Loop through all video_versions to find one that ALREADY includes audio!
+                let firstBuffer = null;
+                for (let i = 0; i < mediaObj.video_versions.length; i++) {
+                    const vUrl = mediaObj.video_versions[i].url;
+                    const buf = await fetchBuffer(vUrl);
+                    if (i === 0) firstBuffer = buf;
+
+                    if (await hasAudioTrack(buf)) {
+                        return { type: "video", buffer: buf, source: `Mobile API (Muxed v${i})` };
+                    }
+                }
+
+                if (firstBuffer) {
+                    return { type: "video", buffer: firstBuffer, source: "Mobile API (Silent/No Audio in Reel)" };
+                }
             }
+
             if (mediaObj.image_versions2?.candidates?.length > 0) {
                 const buffer = await fetchBuffer(mediaObj.image_versions2.candidates[0].url);
                 return { type: "image", buffer, source: "Mobile API Image" };
             }
-        } else {
-            errors.push("MobileAPI: No items");
         }
     } catch (e) {
-        errors.push(`MobileAPI: ${e.response?.status || e.message}`);
+        console.error("Mobile API error:", e.message);
     }
 
-    // 2. Try GraphQL Query
-    try {
-        const gqlRes = await axios.post(
-            "https://www.instagram.com/api/graphql",
-            new URLSearchParams({
-                variables: JSON.stringify({ shortcode }),
-                doc_id: "10015901848480474",
-                lsd: "AVqbxe3J_YA"
-            }).toString(),
-            {
-                headers: {
-                    "User-Agent": UA,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "X-IG-App-ID": "936619743392459",
-                    "X-FB-LSD": "AVqbxe3J_YA",
-                    "X-ASBD-ID": "129477",
-                    "Cookie": cookieHeader,
-                    "Origin": "https://www.instagram.com",
-                    "Referer": `https://www.instagram.com/reel/${shortcode}/`
-                },
-                timeout: 15000
-            }
-        );
-
-        const mediaData = gqlRes.data?.data?.xdt_shortcode_media;
-        if (mediaData?.is_video && mediaData.video_url) {
-            const buffer = await fetchBuffer(mediaData.video_url);
-            return { type: "video", buffer, source: "GraphQL" };
-        }
-        errors.push("GraphQL: No video_url");
-    } catch (e) {
-        errors.push(`GraphQL: ${e.response?.status || e.message}`);
-    }
-
-    // 3. Fallback: Embed Page (Video only on most reels)
+    // 2. Embed Page Fallback
     try {
         const embedRes = await axios.get(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
             headers: { "User-Agent": UA },
@@ -162,13 +158,11 @@ async function getInstaMedia(url) {
         if (vMatch?.[1]) {
             const cleanUrl = vMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "");
             const buffer = await fetchBuffer(cleanUrl);
-            return { type: "video", buffer, source: `Embed Fallback (${errors.join(" | ")})` };
+            return { type: "video", buffer, source: "Embed Fallback" };
         }
-    } catch (e) {
-        errors.push(`Embed: ${e.message}`);
-    }
+    } catch {}
 
-    throw new Error(`ഡൗൺലോഡ് പരാജയപ്പെട്ടു: ${errors.join(" | ")}`);
+    throw new Error("Instagram വീഡിയോ ഡൗൺലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല.");
 }
 
 async function getFbMedia(url) {
