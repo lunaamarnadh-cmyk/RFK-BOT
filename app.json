@@ -1,0 +1,32 @@
+{
+  "name": "RFK-BOT MD",
+  "description": "Fast & Multi-Device WhatsApp Bot by RFK MODS",
+  "repository": "https://github.com/lunaamarnadh-cmyk/RFK-BOT",
+  "keywords": ["whatsapp-bot", "baileys", "rfk-bot", "rfk-mods"],
+  "env": {
+    "SESSION_ID": {
+      "description": "Enter your RFK-BOT~ Session ID here",
+      "required": true
+    },
+    "OWNER_NUMBER": {
+      "description": "Enter Owner WhatsApp Number with Country Code (e.g., 917907228818)",
+      "value": "917907228818",
+      "required": true
+    },
+    "PREFIX": {
+      "description": "Bot Command Prefix",
+      "value": ".",
+      "required": false
+    },
+    "MODE": {
+      "description": "Bot Mode: public or private",
+      "value": "public",
+      "required": false
+    },
+    "AUTO_STATUS": {
+      "description": "Auto View WhatsApp Status (true or false)",
+      "value": "true",
+      "required": false
+    }
+  }
+}
