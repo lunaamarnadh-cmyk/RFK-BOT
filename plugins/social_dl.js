@@ -1,6 +1,7 @@
 
 const axios = require("axios");
 
+const JARVIS_API = "https://lokixer.koyeb.app/";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 async function fetchBuffer(url) {
@@ -28,69 +29,87 @@ async function resolveInstaUrl(url) {
     return url;
 }
 
-// Exact Jarvis-MD Instagram Downloader Logic (igexport.com)
+// Primary: Jarvis-MD's Official Backend API (lokixer.koyeb.app)
+async function tryLokixerInsta(url) {
+    try {
+        const { data } = await axios.get(`${JARVIS_API}download/insta?url=${encodeURIComponent(url)}`, {
+            headers: { "User-Agent": "Mozilla/5.0" },
+            timeout: 20000
+        });
+        const list = data?.result || data?.data || (Array.isArray(data) ? data : null);
+        if (Array.isArray(list) && list.length > 0) {
+            return list
+                .map((item) => {
+                    const mediaUrl = typeof item === "string" ? item : item?.url || item?.videoUrl || item?.download_url;
+                    if (!mediaUrl) return null;
+                    const isImg = item?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl);
+                    return { type: isImg ? "image" : "video", url: mediaUrl };
+                })
+                .filter(Boolean);
+        }
+    } catch {}
+    return null;
+}
+
+// Secondary: Jarvis-MD's igexport scraper fallback
+async function tryIgExport(url) {
+    const isReel = /\/(reel|reels|tv)\//i.test(url);
+    const endpoint = isReel
+        ? `https://igexport.com/api/ig-reels/?url=${encodeURIComponent(url)}`
+        : `https://igexport.com/api/ig-downloader/?url=${encodeURIComponent(url)}`;
+    try {
+        const { data } = await axios.get(endpoint, {
+            headers: {
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json",
+                "Referer": "https://igexport.com/id/video-download/"
+            },
+            timeout: 20000
+        });
+        if (Array.isArray(data?.data?.items) && data.data.items.length > 0) {
+            return data.data.items
+                .map((item) => {
+                    const mediaUrl = item?.videoUrl || item?.url || item?.imageUrl;
+                    if (!mediaUrl) return null;
+                    const isImg = !item?.videoUrl && (item?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl));
+                    return { type: isImg ? "image" : "video", url: mediaUrl };
+                })
+                .filter(Boolean);
+        }
+        if (data?.data?.videoUrl) {
+            return [{ type: "video", url: data.data.videoUrl }];
+        }
+    } catch {}
+    return null;
+}
+
 async function getInstaMedia(rawUrl) {
     const url = await resolveInstaUrl(rawUrl);
     if (!url.includes("instagram.com")) throw new Error("Instagram ലിങ്ക് ശരിയല്ല.");
 
-    const isReel = /\/(reel|reels|tv)\//i.test(url);
-    const endpoints = isReel
-        ? [
-              `https://igexport.com/api/ig-reels/?url=${encodeURIComponent(url)}`,
-              `https://igexport.com/api/ig-downloader/?url=${encodeURIComponent(url)}`
-          ]
-        : [
-              `https://igexport.com/api/ig-downloader/?url=${encodeURIComponent(url)}`,
-              `https://igexport.com/api/ig-reels/?url=${encodeURIComponent(url)}`
-          ];
-
-    for (const apiUrl of endpoints) {
-        try {
-            const { data } = await axios.get(apiUrl, {
-                headers: {
-                    "User-Agent": "Mozilla/5.0",
-                    "Accept": "application/json",
-                    "Referer": "https://igexport.com/id/video-download/"
-                },
-                timeout: 20000
-            });
-
-            const results = [];
-
-            // Format 1: data.items array (Carousel / Multiple posts / Reels)
-            if (Array.isArray(data?.data?.items) && data.data.items.length > 0) {
-                for (const item of data.data.items) {
-                    const mediaUrl = item?.videoUrl || item?.url || item?.imageUrl;
-                    if (mediaUrl) {
-                        const isImg = !item?.videoUrl && (item?.type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl));
-                        results.push({ type: isImg ? "image" : "video", url: mediaUrl });
-                    }
-                }
-            }
-            // Format 2: Single data.videoUrl
-            else if (data?.data?.videoUrl) {
-                results.push({ type: "video", url: data.data.videoUrl });
-            }
-            // Format 3: Single data.imageUrl
-            else if (data?.data?.imageUrl) {
-                results.push({ type: "image", url: data.data.imageUrl });
-            }
-
-            if (results.length > 0) {
-                const downloaded = [];
-                for (const item of results) {
-                    const buffer = await fetchBuffer(item.url);
-                    downloaded.push({ type: item.type, buffer });
-                }
-                return downloaded;
-            }
-        } catch {}
+    const items = (await tryLokixerInsta(url)) || (await tryIgExport(url));
+    if (!items || items.length === 0) {
+        throw new Error("Instagram API-യിൽ നിന്ന് മീഡിയ ലഭിച്ചില്ല. ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പാക്കുക.");
     }
 
-    throw new Error("Instagram API-യിൽ നിന്ന് മീഡിയ ലഭിച്ചില്ല (ലിങ്ക് പബ്ലിക് ആണെന്ന് ഉറപ്പാക്കുക).");
+    const downloaded = [];
+    for (const item of items) {
+        const buffer = await fetchBuffer(item.url);
+        downloaded.push({ type: item.type, buffer });
+    }
+    return downloaded;
 }
 
 async function getFbMedia(url) {
+    try {
+        const { data } = await axios.get(`${JARVIS_API}download/facebook?url=${encodeURIComponent(url)}`, {
+            headers: { "User-Agent": "Mozilla/5.0" },
+            timeout: 20000
+        });
+        const videoUrl = data?.result?.hd || data?.result?.sd;
+        if (videoUrl) return videoUrl;
+    } catch {}
+
     const res = await axios.get(url, {
         headers: {
             "User-Agent": UA,
