@@ -1,3 +1,17 @@
+
+const _styleDb = require("path").join(__dirname, "..", ".rfk_menu_style.json");
+function _getMenuStyle() {
+  try { return JSON.parse(require("fs").readFileSync(_styleDb, "utf8")).style || 1; } catch { return 1; }
+}
+function _applyMenuStyle(txt) {
+  const s = _getMenuStyle();
+  if (s === 2) return txt.replace(/╭─+「/g, "✨ *").replace(/」/g, "*").replace(/│s*▸/g, "  ◦").replace(/[╭╰│─═]+/g, "");
+  if (s === 3) return txt.replace(/╭/g, "╔").replace(/╰/g, "╚").replace(/│/g, "║").replace(/─/g, "═");
+  if (s === 4) return txt.replace(/[╭╰│─═「」]/g, "").replace(/▸/g, "•");
+  if (s === 5) return "```\n" + txt.replace(/[*_`]/g, "") + "\n```";
+  return txt;
+}
+
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
 const axios = require("axios");
 
@@ -26,7 +40,7 @@ module.exports = [
 
             if (viewOnceMsg.imageMessage) {
                 const buffer = await downloadMedia(viewOnceMsg.imageMessage, "image");
-                return sock.sendMessage(jid, { image: buffer, caption: viewOnceMsg.imageMessage.caption || "🔓 *Opened by 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂*" }, { quoted: msg });
+                return sock.sendMessage(jid, { image: buffer, caption: _applyMenuStyle(viewOnceMsg).imageMessage.caption || "🔓 *Opened by 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂*" }, { quoted: msg });
             }
             if (viewOnceMsg.videoMessage) {
                 const buffer = await downloadMedia(viewOnceMsg.videoMessage, "video");
