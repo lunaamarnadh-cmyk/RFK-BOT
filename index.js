@@ -283,6 +283,7 @@ function _rfkMarkSeen(id) {
   return false;
 }
 const _rfkBootTime = Date.now();
+const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
             if (chatUpdate.type !== "notify") return;
@@ -292,9 +293,17 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
             if (chatUpdate.type && chatUpdate.type !== "notify") return;
     if (Date.now() - _rfkBootTime < 12000) return;
     for (const msg of chatUpdate.messages || []) {
-      if (_rfkMarkSeen(msg?.key?.id)) continue;
+        if (!msg.message) continue;
+        if (_rfkMarkSeen(msg?.key?.id)) continue;
         const _mTs = Number(msg?.messageTimestamp || 0);
         if (_mTs > 0 && (Math.floor(Date.now() / 1000) - _mTs) > 15) continue;
+        const _rawTxt = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || "").trim().toLowerCase();
+        if (_rawTxt.startsWith(".")) {
+            const _cdKey = (msg.key?.remoteJid || "") + "::" + _rawTxt;
+            const _lastRun = _rfkCmdCooldown.get(_cdKey) || 0;
+            if (Date.now() - _lastRun < 10000) continue;
+            _rfkCmdCooldown.set(_cdKey, Date.now());
+        }
       const _rfkMsgTs = Number(msg.messageTimestamp || 0);
       if (_rfkMsgTs && (nowSec - _rfkMsgTs) > 25) continue;
         const keyCheck = JSON.stringify(msg.key || {});
