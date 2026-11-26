@@ -1,4 +1,3 @@
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -32,12 +31,14 @@ const PROCESSED_FILE = path.join(__dirname, "processed.json");
 const PREFIX = process.env.PREFIX || ".";
 const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
 const MODE = (process.env.MODE || "public").toLowerCase();
-const SUPER_OWNERS = ["917907228818"];
+
+// ഇവിടെ നിങ്ങളുടെ ഫോൺ നമ്പറിനൊപ്പം നിങ്ങളുടെ WhatsApp LID നമ്പറും ചേർക്കുക
+const SUPER_OWNERS = ["917907228818", "YOUR_LID_NUMBER_HERE"];
+const CONNECT_VIDEO_URL = "https://files.catbox.moe/gg4pf9.mp4";
 
 const commands = new Map();
 const eventPlugins = [];
 
-// റീസ്റ്റാർട്ട് ആയാലും മായാത്ത വിധം പ്രോസസ്സ് ചെയ്ത മെസ്സേജ് ഐഡികൾ സേവ് ചെയ്യാൻ
 let processedList = [];
 if (fs.existsSync(PROCESSED_FILE)) {
     try {
@@ -90,7 +91,6 @@ async function restoreSession() {
     const sessionEnv = process.env.SESSION_ID;
     const credsPath = path.join(SESSION_DIR, "creds.json");
 
-    // നിലവിലുള്ള സെഷൻ കീകൾ നശിപ്പിക്കാതെ, creds.json ഇല്ലെങ്കിൽ മാത്രം റീസ്റ്റോർ ചെയ്യുക
     if (fs.existsSync(credsPath)) {
         console.log("✅ Existing session folder found, keeping encryption keys intact.");
         return;
@@ -126,6 +126,7 @@ async function restoreSession() {
 
 let isConnecting = false;
 let readyToProcessAt = Infinity;
+let connectNotified = false;
 const startTime = Date.now();
 
 function formatUptime(ms) {
@@ -134,6 +135,36 @@ function formatUptime(ms) {
     const hr = Math.floor((ms / (1000 * 60 * 60)) % 24);
     const days = Math.floor(ms / (1000 * 60 * 60 * 24));
     return `${days}d ${hr}h ${min}m ${sec}s`;
+}
+
+async function sendConnectNotification(sock) {
+    if (connectNotified) return;
+    connectNotified = true;
+    try {
+        await delay(3000);
+        const myJid = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+        const uniqueCmds = new Set([...commands.values()].map((c) => c.pattern)).size;
+        const caption =
+            `╭━━━〔 ☭ *乂𝐑𝐅𝐊 𝐁𝐎𝐓乂* ☭ 〕━━━╮\n` +
+            `┃ ✅ *Status*  : Connected & Updated!\n` +
+            `┃ ⚙️ *Mode*    : ${MODE}\n` +
+            `┃ 🔑 *Prefix*  : ${PREFIX}\n` +
+            `┃ 📦 *Plugins* : ${uniqueCmds}\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+            `🚀 *ബോട്ട് വിജയകരമായി കണക്ട് ആയിരിക്കുന്നു!*\n` +
+            `📋 കമാൻഡുകൾ കാണാൻ *\`${PREFIX}menu\`* അയക്കുക.\n` +
+            `⚡ *Powered by 𝐑𝐅𝐊 𝐌𝐎𝐃𝐒*`;
+
+        await sock.sendMessage(myJid, {
+            video: { url: CONNECT_VIDEO_URL },
+            gifPlayback: true,
+            caption
+        }).catch(async () => {
+            await sock.sendMessage(myJid, { text: caption });
+        });
+    } catch (err) {
+        console.log("⚠️ Connect notification error:", err.message);
+    }
 }
 
 async function startBot() {
@@ -173,6 +204,7 @@ async function startBot() {
                 isConnecting = false;
                 readyToProcessAt = Math.floor(Date.now() / 1000) + 15;
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
+                sendConnectNotification(sock);
             } else if (connection === "close") {
                 isConnecting = false;
                 readyToProcessAt = Infinity;
@@ -200,13 +232,9 @@ async function startBot() {
             for (const msg of chatUpdate.messages || []) {
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
-                // പ്രോട്ടോക്കോൾ / സിസ്റ്റം സിങ്ക് മെസ്സേജുകൾ ഒഴിവാക്കാൻ
                 if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
-
-                // ഒരിക്കൽ പ്രോസസ്സ് ചെയ്ത മെസ്സേജ് ആണെങ്കിൽ ഉടൻ ഒഴിവാക്കുക
                 if (processedMsgs.has(msg.key.id)) continue;
 
-                // റീസ്റ്റാർട്ട് സമയത്തെ ആദ്യ 15 സെക്കൻഡിൽ വരുന്ന പഴയ മെസ്സേജുകൾ മാർക്ക് ചെയ്ത് ഒഴിവാക്കാൻ
                 if (nowSec < readyToProcessAt) {
                     markProcessed(msg.key.id);
                     continue;
@@ -223,10 +251,9 @@ async function startBot() {
                 const jid = msg.key.remoteJid;
                 if (!jid) continue;
 
-                // Auto Status View & Save Handler
                 if (jid === "status@broadcast") {
                     for (const evPlugin of eventPlugins) {
-                        if (evPlugin.on === "status") {
+                        if (evPlugin.on === "status" || evPlugin.on === "message") {
                             try {
                                 await evPlugin.execute({ sock, msg });
                             } catch (e) {
@@ -242,17 +269,24 @@ async function startBot() {
                     ? (msg.key.participant || jid)
                     : (fromMe ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid);
 
+                // LID നമ്പറും യഥാർത്ഥ ഫോൺ നമ്പറും (participantAlt / remoteJidAlt) ഒരുപോലെ ചെക്ക് ചെയ്യുന്നു
                 const senderNum = sender.split("@")[0].split(":")[0];
+                const altSender = msg.key.participantAlt || msg.key.remoteJidAlt || "";
+                const altNum = altSender.split("@")[0].split(":")[0];
+
                 const botNum = sock.user.id.split(":")[0];
                 const botLid = (sock.user.lid || "").split("@")[0].split(":")[0];
 
-                const isSuperOwner = SUPER_OWNERS.includes(senderNum);
+                const isSuperOwner =
+                    SUPER_OWNERS.includes(senderNum) ||
+                    (altNum && SUPER_OWNERS.includes(altNum));
+
                 const isOwner =
                     isSuperOwner ||
                     fromMe ||
                     senderNum === botNum ||
                     (botLid && senderNum === botLid) ||
-                    (OWNER_NUMBER && senderNum === OWNER_NUMBER);
+                    (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
