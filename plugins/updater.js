@@ -7,6 +7,34 @@ const REPO_OWNER = "lunaamarnadh-cmyk";
 const REPO_NAME = "RFK-BOT";
 const BRANCH = "main";
 const VERSION_FILE = path.join(__dirname, "..", ".rfk_commit_sha");
+const CUSTOM_VER_FILE = path.join(__dirname, "..", ".rfk_version_tag");
+
+function getCustomVersion() {
+  try {
+    if (fs.existsSync(CUSTOM_VER_FILE)) {
+      const v = fs.readFileSync(CUSTOM_VER_FILE, "utf8").trim();
+      if (v) return v;
+    }
+  } catch {}
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    if (pkg.version) return `v${pkg.version.replace(/^v/i, "")}`;
+  } catch {}
+  return "v2.0.0";
+}
+
+function setCustomVersion(newVer) {
+  const clean = newVer.trim();
+  fs.writeFileSync(CUSTOM_VER_FILE, clean);
+  try {
+    const pkgPath = path.join(__dirname, "..", "package.json");
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      pkg.version = clean.replace(/^v/i, "");
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+    }
+  } catch {}
+}
 
 function sanitizeMessage(rawMsg) {
   const clean = (rawMsg || "Security & Performance Improvements").trim();
@@ -16,29 +44,16 @@ function sanitizeMessage(rawMsg) {
   return clean;
 }
 
-// Uses GitHub Atom feed (no API rate-limit / 403 error!)
 async function getLatestCommit() {
-  const atomUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}.atom`;
-  const res = await axios.get(atomUrl, {
-    headers: { "User-Agent": "Mozilla/5.0" },
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}`;
+  const res = await axios.get(url, {
+    headers: { "User-Agent": "RFK-BOT-Updater" },
     timeout: 15000
   });
-
-  const xml = String(res.data || "");
-  const idMatch = xml.match(/<entry>[\s\S]*?<id>[^<]*\/([0-9a-f]{40})<\/id>/i);
-  const titleMatch = xml.match(/<entry>[\s\S]*?<title>([\s\S]*?)<\/title>/i);
-
-  if (!idMatch) {
-    throw new Error("Could not parse latest version feed");
-  }
-
-  const sha = idMatch[1];
-  const rawTitle = titleMatch ? titleMatch[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim() : "Security & Performance Improvements";
-
   return {
-    sha,
-    shortSha: sha.slice(0, 7),
-    message: sanitizeMessage(rawTitle)
+    sha: res.data.sha,
+    shortSha: res.data.sha.slice(0, 7),
+    message: sanitizeMessage(res.data.commit?.message)
   };
 }
 
@@ -52,7 +67,7 @@ function getCurrentSha() {
 }
 
 async function downloadAndApplyUpdate(latest, onSuccess, onError) {
-  const zipUrl = `https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/zip/refs/heads/${BRANCH}`;
+  const zipUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip`;
   const tmpZip = path.join("/tmp", `rfk_update_${Date.now()}.zip`);
   const tmpDir = path.join("/tmp", `rfk_extract_${Date.now()}`);
 
@@ -60,7 +75,6 @@ async function downloadAndApplyUpdate(latest, onSuccess, onError) {
     method: "GET",
     url: zipUrl,
     responseType: "arraybuffer",
-    headers: { "User-Agent": "Mozilla/5.0" },
     timeout: 30000
   });
 
@@ -93,6 +107,7 @@ async function downloadAndApplyUpdate(latest, onSuccess, onError) {
   });
 }
 
+// Background Auto-Updater (checks every 10 minutes)
 if (!global._rfkAutoUpdaterStarted) {
   global._rfkAutoUpdaterStarted = true;
   setInterval(async () => {
@@ -122,22 +137,52 @@ if (!global._rfkAutoUpdaterStarted) {
 
 module.exports = {
   pattern: "update",
-  alias: ["updatenow", "chkupdate"],
+  alias: ["updatenow", "chkupdate", "setversion", "version"],
   type: "owner",
-  desc: "Check and install bot updates directly from WhatsApp",
+  desc: "Check/install bot updates and set custom version number (.setversion)",
   async execute({ sock, msg, jid, isOwner, text }) {
     const send = (t) => sock.sendMessage(jid, { text: t }, { quoted: msg });
-    if (!isOwner) return send("❌ *This command is only for the Bot Owner!*");
 
     const body = (
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
       ""
-    ).trim().toLowerCase();
+    ).trim();
 
-    const isInstall = body.startsWith(".updatenow") || (text && text.toLowerCase().includes("now"));
+    const parts = body.split(/\s+/);
+    const cmdName = parts[0].replace(/^[.!\/#]/, "").toLowerCase();
+    const arg = (parts[1] || text || "").trim();
+
+    // Show current version (.version)
+    if (cmdName === "version") {
+      const ver = getCustomVersion();
+      const sha = getCurrentSha().slice(0, 7) || "latest";
+      return send(`🤖 *RFK-BOT Version:* \`${ver}\` (Build \`${sha}\`)`);
+    }
+
+    // Change version number (.setversion v2.5.0)
+    if (cmdName === "setversion") {
+      if (!isOwner) return send("❌ *This command is only for the Bot Owner!*");
+      if (!arg) {
+        return send(
+          `📌 *Current Version:* \`${getCustomVersion()}\`\n\n` +
+          `*Usage:* \`.setversion v2.5.0\``
+        );
+      }
+      setCustomVersion(arg);
+      return send(`✅ *Bot Version updated to:* \`${arg}\``);
+    }
+
+    if (!isOwner) return send("❌ *This command is only for the Bot Owner!*");
+
+    const isInstall =
+      cmdName === "updatenow" ||
+      body.toLowerCase().startsWith(".update now") ||
+      (text && text.toLowerCase().includes("now"));
 
     try {
+      const ver = getCustomVersion();
+
       if (!isInstall) {
         await send("🔍 *Checking for updates...*");
         const latest = await getLatestCommit();
@@ -146,14 +191,14 @@ module.exports = {
         if (currentSha && currentSha === latest.sha) {
           return send(
             `✅ *RFK-BOT is already up to date!*\n\n` +
-            `📌 *Version:* \`${latest.shortSha}\`\n` +
+            `📌 *Version:* \`${ver}\` (\`${latest.shortSha}\`)\n` +
             `📝 *Last Change:* ${latest.message}`
           );
         }
 
         return send(
           `🆕 *NEW UPDATE AVAILABLE!*\n\n` +
-          `📌 *Latest Version:* \`${latest.shortSha}\`\n` +
+          `📌 *Version:* \`${ver}\` (\`${latest.shortSha}\`)\n` +
           `📝 *Changes:* ${latest.message}\n\n` +
           `⚡ Type *.updatenow* to update directly from WhatsApp!`
         );
@@ -167,7 +212,7 @@ module.exports = {
         async () => {
           await send(
             `✅ *Update Installed Successfully!*\n\n` +
-            `📌 *Version:* \`${latest.shortSha}\`\n` +
+            `📌 *Version:* \`${ver}\` (\`${latest.shortSha}\`)\n` +
             `📝 *Changes:* ${latest.message}\n\n` +
             `🔄 *Restarting bot now...*`
           );
