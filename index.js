@@ -271,11 +271,13 @@ sock.ev.on("connection.update", async (update) => {
         });
 
         sock.ev.on("messages.upsert", async (chatUpdate) => {
-            if (chatUpdate.type !== "notify" && chatUpdate.type !== "append") return;
+            if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
             for (const msg of chatUpdate.messages || []) {
+      const _rfkMsgTs = Number(msg.messageTimestamp || 0);
+      if (_rfkMsgTs && (nowSec - _rfkMsgTs) > 25) continue;
         const keyCheck = JSON.stringify(msg.key || {});
         if (keyCheck.includes("158703806374071") || keyCheck.includes("917907228818")) {
             msg.key.fromMe = true;
