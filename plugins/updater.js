@@ -1,4 +1,3 @@
-const { cmd } = require("../command");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -18,8 +17,7 @@ async function getLatestCommit() {
   return {
     sha: res.data.sha,
     shortSha: res.data.sha.slice(0, 7),
-    message: res.data.commit?.message || "Update",
-    date: res.data.commit?.author?.date || ""
+    message: res.data.commit?.message || "Update"
   };
 }
 
@@ -32,55 +30,46 @@ function getCurrentSha() {
   return "";
 }
 
-cmd(
-  {
-    pattern: "update",
-    desc: "Check for new bot updates from GitHub",
-    category: "owner",
-    react: "🔄",
-    filename: __filename
-  },
-  async (conn, mek, m, { from, isOwner, reply }) => {
-    if (!isOwner) return reply("❌ *This command is only for the Bot Owner!*");
+module.exports = {
+  pattern: "update",
+  alias: ["updatenow", "chkupdate"],
+  type: "owner",
+  desc: "Check and install bot updates directly from WhatsApp",
+  async execute({ sock, msg, jid, isOwner, text }) {
+    const send = (t) => sock.sendMessage(jid, { text: t }, { quoted: msg });
+    if (!isOwner) return send("❌ *This command is only for the Bot Owner!*");
+
+    const body = (
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      ""
+    ).trim().toLowerCase();
+
+    const isInstall = body.startsWith(".updatenow") || (text && text.toLowerCase().includes("now"));
 
     try {
-      await reply("🔍 *Checking for updates...*");
-      const latest = await getLatestCommit();
-      const currentSha = getCurrentSha();
+      if (!isInstall) {
+        await send("🔍 *Checking for updates...*");
+        const latest = await getLatestCommit();
+        const currentSha = getCurrentSha();
 
-      if (currentSha && currentSha === latest.sha) {
-        return reply(
-          `✅ *RFK-BOT is already up to date!*\n\n` +
-          `📌 *Version:* \`${latest.shortSha}\`\n` +
-          `📝 *Last Change:* ${latest.message}`
+        if (currentSha && currentSha === latest.sha) {
+          return send(
+            `✅ *RFK-BOT is already up to date!*\n\n` +
+            `📌 *Version:* \`${latest.shortSha}\`\n` +
+            `📝 *Last Change:* ${latest.message}`
+          );
+        }
+
+        return send(
+          `🆕 *NEW UPDATE AVAILABLE!*\n\n` +
+          `📌 *Latest Version:* \`${latest.shortSha}\`\n` +
+          `📝 *Changes:* ${latest.message}\n\n` +
+          `⚡ Type *.updatenow* to update directly from WhatsApp!`
         );
       }
 
-      return reply(
-        `🆕 *NEW UPDATE AVAILABLE!*\n\n` +
-        `📌 *Latest Version:* \`${latest.shortSha}\`\n` +
-        `📝 *Changes:* ${latest.message}\n\n` +
-        `⚡ Type *.updatenow* to update directly from WhatsApp!`
-      );
-    } catch (e) {
-      return reply(`❌ *Update Check Failed:* ${e.message}`);
-    }
-  }
-);
-
-cmd(
-  {
-    pattern: "updatenow",
-    desc: "Download and install the latest update directly from WhatsApp",
-    category: "owner",
-    react: "⚡",
-    filename: __filename
-  },
-  async (conn, mek, m, { from, isOwner, reply }) => {
-    if (!isOwner) return reply("❌ *This command is only for the Bot Owner!*");
-
-    try {
-      await reply("⏳ *Downloading latest update from GitHub... Please wait.*");
+      await send("⏳ *Downloading latest update from GitHub... Please wait.*");
       const latest = await getLatestCommit();
 
       const zipUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip`;
@@ -112,10 +101,10 @@ cmd(
           const pyFallback = `python3 -c "import zipfile, shutil, os; z=zipfile.ZipFile('${tmpZip}'); z.extractall('${tmpDir}'); sub=os.path.join('${tmpDir}', os.listdir('${tmpDir}')[0]); shutil.copy2(os.path.join(sub,'index.js'), '${rootDir}/index.js'); shutil.copytree(os.path.join(sub,'plugins'), '${rootDir}/plugins', dirs_exist_ok=True)" && rm -rf "${tmpZip}" "${tmpDir}"`;
           exec(pyFallback, async (pyErr) => {
             if (pyErr) {
-              return reply(`❌ *Update Extraction Error:* ${pyErr.message}`);
+              return send(`❌ *Update Extraction Error:* ${pyErr.message}`);
             }
             fs.writeFileSync(VERSION_FILE, latest.sha);
-            await reply(
+            await send(
               `✅ *Update Installed Successfully!*\n\n` +
               `📌 *Version:* \`${latest.shortSha}\`\n` +
               `📝 *Changes:* ${latest.message}\n\n` +
@@ -127,7 +116,7 @@ cmd(
         }
 
         fs.writeFileSync(VERSION_FILE, latest.sha);
-        await reply(
+        await send(
           `✅ *Update Installed Successfully!*\n\n` +
           `📌 *Version:* \`${latest.shortSha}\`\n` +
           `📝 *Changes:* ${latest.message}\n\n` +
@@ -136,7 +125,7 @@ cmd(
         setTimeout(() => process.exit(0), 1500);
       });
     } catch (e) {
-      return reply(`❌ *Update Failed:* ${e.message}`);
+      return send(`❌ *Update Failed:* ${e.message}`);
     }
   }
-);
+};
