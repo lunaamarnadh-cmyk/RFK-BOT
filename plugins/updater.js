@@ -16,16 +16,29 @@ function sanitizeMessage(rawMsg) {
   return clean;
 }
 
+// Uses GitHub Atom feed (no API rate-limit / 403 error!)
 async function getLatestCommit() {
-  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}`;
-  const res = await axios.get(url, {
-    headers: { "User-Agent": "RFK-BOT-Updater" },
+  const atomUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}.atom`;
+  const res = await axios.get(atomUrl, {
+    headers: { "User-Agent": "Mozilla/5.0" },
     timeout: 15000
   });
+
+  const xml = String(res.data || "");
+  const idMatch = xml.match(/<entry>[\s\S]*?<id>[^<]*\/([0-9a-f]{40})<\/id>/i);
+  const titleMatch = xml.match(/<entry>[\s\S]*?<title>([\s\S]*?)<\/title>/i);
+
+  if (!idMatch) {
+    throw new Error("Could not parse latest version feed");
+  }
+
+  const sha = idMatch[1];
+  const rawTitle = titleMatch ? titleMatch[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim() : "Security & Performance Improvements";
+
   return {
-    sha: res.data.sha,
-    shortSha: res.data.sha.slice(0, 7),
-    message: sanitizeMessage(res.data.commit?.message)
+    sha,
+    shortSha: sha.slice(0, 7),
+    message: sanitizeMessage(rawTitle)
   };
 }
 
@@ -39,7 +52,7 @@ function getCurrentSha() {
 }
 
 async function downloadAndApplyUpdate(latest, onSuccess, onError) {
-  const zipUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip`;
+  const zipUrl = `https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/zip/refs/heads/${BRANCH}`;
   const tmpZip = path.join("/tmp", `rfk_update_${Date.now()}.zip`);
   const tmpDir = path.join("/tmp", `rfk_extract_${Date.now()}`);
 
@@ -47,6 +60,7 @@ async function downloadAndApplyUpdate(latest, onSuccess, onError) {
     method: "GET",
     url: zipUrl,
     responseType: "arraybuffer",
+    headers: { "User-Agent": "Mozilla/5.0" },
     timeout: 30000
   });
 
