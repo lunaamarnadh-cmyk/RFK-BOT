@@ -294,6 +294,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
     if (Date.now() - _rfkBootTime < 12000) return;
     for (const msg of chatUpdate.messages || []) {
         if (!msg.message) continue;
+        if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
         if (_rfkMarkSeen(msg?.key?.id)) continue;
         const _mTs = Number(msg?.messageTimestamp || 0);
         if (_mTs > 0 && (Math.floor(Date.now() / 1000) - _mTs) > 60) continue;
