@@ -289,7 +289,8 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
 
             const nowSec = Math.floor(Date.now() / 1000);
 
-            if (Date.now() - _rfkBootTime < 6000) return;
+            if (chatUpdate.type && chatUpdate.type !== "notify") return;
+    if (Date.now() - _rfkBootTime < 12000) return;
     for (const msg of chatUpdate.messages || []) {
       if (_rfkMarkSeen(msg?.key?.id)) continue;
       const _rfkMsgTs = Number(msg.messageTimestamp || 0);
