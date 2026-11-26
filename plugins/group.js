@@ -99,7 +99,7 @@ module.exports = [
             }
             if (text.toLowerCase() === "private") {
                 config.MODE = "private";
-                return reply("🔒 *RFK BOT ഇപ്പോൾ PRIVATE MODE ആണ്!* (ഓണർക്ക് മാത്രം ഉപയോഗിക്കാം)");
+                return reply("🔒 *RFK BOT is currently in PRIVATE MODE!* (Owner only)");
             }
             return reply(`നിലവിലെ മോഡ്: *${(config.MODE || "private").toUpperCase()}*\nമാറ്റാൻ: \`.mode public\` അല്ലെങ്കിൽ \`.mode private\``);
         }

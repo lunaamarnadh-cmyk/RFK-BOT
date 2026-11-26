@@ -1,0 +1,6 @@
+
+session/
+session_backup/
+set-session.js
+creds.json
+*.bak
