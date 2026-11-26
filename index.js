@@ -245,6 +245,7 @@ sock.sendMessage = async (jid, content, opts) => {
 };
 try { require("./plugins/smart_features"); } catch {}
     try { require("./plugins/group_guard"); } catch {}
+    try { require("./plugins/auto_features"); } catch {}
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
