@@ -1,3 +1,4 @@
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -32,8 +33,7 @@ const PREFIX = process.env.PREFIX || ".";
 const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
 const MODE = (process.env.MODE || "public").toLowerCase();
 
-// ഇവിടെ നിങ്ങളുടെ ഫോൺ നമ്പറിനൊപ്പം നിങ്ങളുടെ WhatsApp LID നമ്പറും ചേർക്കുക
-const SUPER_OWNERS = ["917907228818", "YOUR_LID_NUMBER_HERE"];
+const SUPER_OWNERS = ["917907228818", "158703806374071"];
 const CONNECT_VIDEO_URL = "https://files.catbox.moe/gg4pf9.mp4";
 
 const commands = new Map();
@@ -269,7 +269,6 @@ async function startBot() {
                     ? (msg.key.participant || jid)
                     : (fromMe ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid);
 
-                // LID നമ്പറും യഥാർത്ഥ ഫോൺ നമ്പറും (participantAlt / remoteJidAlt) ഒരുപോലെ ചെക്ക് ചെയ്യുന്നു
                 const senderNum = sender.split("@")[0].split(":")[0];
                 const altSender = msg.key.participantAlt || msg.key.remoteJidAlt || "";
                 const altNum = altSender.split("@")[0].split(":")[0];
