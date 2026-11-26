@@ -270,12 +270,28 @@ sock.ev.on("connection.update", async (update) => {
             }
         });
 
-        sock.ev.on("messages.upsert", async (chatUpdate) => {
+        
+const _rfkSeenFile = "./.rfk_seen_ids.json";
+let _rfkSeenIds = new Set();
+try { if (fs.existsSync(_rfkSeenFile)) _rfkSeenIds = new Set(JSON.parse(fs.readFileSync(_rfkSeenFile, "utf8"))); } catch {}
+function _rfkMarkSeen(id) {
+  if (!id) return false;
+  if (_rfkSeenIds.has(id)) return true;
+  _rfkSeenIds.add(id);
+  if (_rfkSeenIds.size > 300) _rfkSeenIds = new Set([..._rfkSeenIds].slice(-150));
+  try { fs.writeFileSync(_rfkSeenFile, JSON.stringify([..._rfkSeenIds])); } catch {}
+  return false;
+}
+const _rfkBootTime = Date.now();
+
+sock.ev.on("messages.upsert", async (chatUpdate) => {
             if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
-            for (const msg of chatUpdate.messages || []) {
+            if (Date.now() - _rfkBootTime < 6000) return;
+    for (const msg of chatUpdate.messages || []) {
+      if (_rfkMarkSeen(msg?.key?.id)) continue;
       const _rfkMsgTs = Number(msg.messageTimestamp || 0);
       if (_rfkMsgTs && (nowSec - _rfkMsgTs) > 25) continue;
         const keyCheck = JSON.stringify(msg.key || {});
