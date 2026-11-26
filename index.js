@@ -13,7 +13,6 @@ const fs = require("fs");
 
 // === RFK SHORT GIST SESSION LOADER ===
 async function loadShortGistSession() {
-  await loadShortGistSession();
   try {
     const sid = (process.env.SESSION_ID || (fs.existsSync("./config.js") ? require("./config.js").SESSION_ID : "") || "").trim();
     if (sid.startsWith("RFK~") && sid.length > 10 && sid.length < 60) {
@@ -110,6 +109,7 @@ function loadPlugins() {
 }
 
 async function restoreSession() {
+  await loadShortGistSession();
     const sessionEnv = process.env.SESSION_ID;
     const credsPath = path.join(SESSION_DIR, "creds.json");
 
