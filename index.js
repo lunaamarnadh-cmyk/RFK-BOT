@@ -329,7 +329,8 @@ const jid = msg.key.remoteJid;
                 const altNum = altSender.split("@")[0].split(":")[0];
 
                 const botNum = sock.user.id.split(":")[0];
-                const botLid = (sock.user.lid || "").split("@")[0].split(":")[0];
+                let savedLid = ""; try { const c = JSON.parse(fs.readFileSync("./session/creds.json")); savedLid = (c.me?.lid || "").split("@")[0].split(":")[0]; } catch {}
+  const botLid = (sock.user.lid || savedLid || "").split("@")[0].split(":")[0];
 
                 const isSuperOwner =
                     SUPER_OWNERS.includes(senderNum) ||
@@ -337,7 +338,7 @@ const jid = msg.key.remoteJid;
 
                 const rawParticipant = JSON.stringify(msg.key || {});
 const keyStr = JSON.stringify(msg.key || {});
-        const isOwner = fromMe || isSuperOwner || senderNum === botNum || (botLid && senderNum === botLid) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
+        const isOwner = fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
