@@ -243,7 +243,8 @@ sock.sendMessage = async (jid, content, opts) => {
     return await _rawSend(jid, content, {});
   }
 };
-sock.ev.on("connection.update", async (update) => {
+try { require("./plugins/smart_features"); } catch {}
+    sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === "open") {
