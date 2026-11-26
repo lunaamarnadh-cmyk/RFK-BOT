@@ -8,6 +8,14 @@ const REPO_NAME = "RFK-BOT";
 const BRANCH = "main";
 const VERSION_FILE = path.join(__dirname, "..", ".rfk_commit_sha");
 
+function sanitizeMessage(rawMsg) {
+  const clean = (rawMsg || "Security & Performance Improvements").trim();
+  if (/\d{10,15}/.test(clean) || /owner|sudo|number/i.test(clean)) {
+    return "Security & Performance Improvements";
+  }
+  return clean;
+}
+
 async function getLatestCommit() {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}`;
   const res = await axios.get(url, {
@@ -17,7 +25,7 @@ async function getLatestCommit() {
   return {
     sha: res.data.sha,
     shortSha: res.data.sha.slice(0, 7),
-    message: res.data.commit?.message || "Update"
+    message: sanitizeMessage(res.data.commit?.message)
   };
 }
 
@@ -28,6 +36,74 @@ function getCurrentSha() {
     }
   } catch {}
   return "";
+}
+
+async function downloadAndApplyUpdate(latest, onSuccess, onError) {
+  const zipUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip`;
+  const tmpZip = path.join("/tmp", `rfk_update_${Date.now()}.zip`);
+  const tmpDir = path.join("/tmp", `rfk_extract_${Date.now()}`);
+
+  const response = await axios({
+    method: "GET",
+    url: zipUrl,
+    responseType: "arraybuffer",
+    timeout: 30000
+  });
+
+  fs.writeFileSync(tmpZip, Buffer.from(response.data));
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  const rootDir = path.join(__dirname, "..");
+
+  const updateScript = `
+    unzip -qo "${tmpZip}" -d "${tmpDir}" && \
+    SRC_DIR=$(find "${tmpDir}" -mindepth 1 -maxdepth 1 -type d | head -n 1) && \
+    cp -rf "$SRC_DIR/index.js" "${rootDir}/" && \
+    cp -rf "$SRC_DIR/plugins/"* "${rootDir}/plugins/" && \
+    rm -rf "${tmpZip}" "${tmpDir}"
+  `;
+
+  exec(updateScript, async (err) => {
+    if (err) {
+      const pyFallback = `python3 -c "import zipfile, shutil, os; z=zipfile.ZipFile('${tmpZip}'); z.extractall('${tmpDir}'); sub=os.path.join('${tmpDir}', os.listdir('${tmpDir}')[0]); shutil.copy2(os.path.join(sub,'index.js'), '${rootDir}/index.js'); shutil.copytree(os.path.join(sub,'plugins'), '${rootDir}/plugins', dirs_exist_ok=True)" && rm -rf "${tmpZip}" "${tmpDir}"`;
+      exec(pyFallback, async (pyErr) => {
+        if (pyErr) return onError(pyErr);
+        fs.writeFileSync(VERSION_FILE, latest.sha);
+        await onSuccess();
+      });
+      return;
+    }
+
+    fs.writeFileSync(VERSION_FILE, latest.sha);
+    await onSuccess();
+  });
+}
+
+if (!global._rfkAutoUpdaterStarted) {
+  global._rfkAutoUpdaterStarted = true;
+  setInterval(async () => {
+    try {
+      const latest = await getLatestCommit();
+      const currentSha = getCurrentSha();
+
+      if (!currentSha) {
+        fs.writeFileSync(VERSION_FILE, latest.sha);
+        return;
+      }
+
+      if (currentSha !== latest.sha) {
+        console.log(`🔄 Auto-updating RFK-BOT to ${latest.shortSha}...`);
+        await downloadAndApplyUpdate(
+          latest,
+          async () => {
+            console.log(`✅ Auto-update ${latest.shortSha} installed! Restarting...`);
+            setTimeout(() => process.exit(0), 1500);
+          },
+          (e) => console.error("❌ Auto-update failed:", e.message)
+        );
+      }
+    } catch {}
+  }, 10 * 60 * 1000);
 }
 
 module.exports = {
@@ -72,58 +148,21 @@ module.exports = {
       await send("⏳ *Downloading latest update from GitHub... Please wait.*");
       const latest = await getLatestCommit();
 
-      const zipUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip`;
-      const tmpZip = path.join("/tmp", `rfk_update_${Date.now()}.zip`);
-      const tmpDir = path.join("/tmp", `rfk_extract_${Date.now()}`);
-
-      const response = await axios({
-        method: "GET",
-        url: zipUrl,
-        responseType: "arraybuffer",
-        timeout: 30000
-      });
-
-      fs.writeFileSync(tmpZip, Buffer.from(response.data));
-      fs.mkdirSync(tmpDir, { recursive: true });
-
-      const rootDir = path.join(__dirname, "..");
-
-      const updateScript = `
-        unzip -qo "${tmpZip}" -d "${tmpDir}" && \
-        SRC_DIR=$(find "${tmpDir}" -mindepth 1 -maxdepth 1 -type d | head -n 1) && \
-        cp -rf "$SRC_DIR/index.js" "${rootDir}/" && \
-        cp -rf "$SRC_DIR/plugins/"* "${rootDir}/plugins/" && \
-        rm -rf "${tmpZip}" "${tmpDir}"
-      `;
-
-      exec(updateScript, async (err) => {
-        if (err) {
-          const pyFallback = `python3 -c "import zipfile, shutil, os; z=zipfile.ZipFile('${tmpZip}'); z.extractall('${tmpDir}'); sub=os.path.join('${tmpDir}', os.listdir('${tmpDir}')[0]); shutil.copy2(os.path.join(sub,'index.js'), '${rootDir}/index.js'); shutil.copytree(os.path.join(sub,'plugins'), '${rootDir}/plugins', dirs_exist_ok=True)" && rm -rf "${tmpZip}" "${tmpDir}"`;
-          exec(pyFallback, async (pyErr) => {
-            if (pyErr) {
-              return send(`❌ *Update Extraction Error:* ${pyErr.message}`);
-            }
-            fs.writeFileSync(VERSION_FILE, latest.sha);
-            await send(
-              `✅ *Update Installed Successfully!*\n\n` +
-              `📌 *Version:* \`${latest.shortSha}\`\n` +
-              `📝 *Changes:* ${latest.message}\n\n` +
-              `🔄 *Restarting bot now...*`
-            );
-            setTimeout(() => process.exit(0), 1500);
-          });
-          return;
+      await downloadAndApplyUpdate(
+        latest,
+        async () => {
+          await send(
+            `✅ *Update Installed Successfully!*\n\n` +
+            `📌 *Version:* \`${latest.shortSha}\`\n` +
+            `📝 *Changes:* ${latest.message}\n\n` +
+            `🔄 *Restarting bot now...*`
+          );
+          setTimeout(() => process.exit(0), 1500);
+        },
+        async (e) => {
+          await send(`❌ *Update Extraction Error:* ${e.message}`);
         }
-
-        fs.writeFileSync(VERSION_FILE, latest.sha);
-        await send(
-          `✅ *Update Installed Successfully!*\n\n` +
-          `📌 *Version:* \`${latest.shortSha}\`\n` +
-          `📝 *Changes:* ${latest.message}\n\n` +
-          `🔄 *Restarting bot now...*`
-        );
-        setTimeout(() => process.exit(0), 1500);
-      });
+      );
     } catch (e) {
       return send(`❌ *Update Failed:* ${e.message}`);
     }
