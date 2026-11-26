@@ -293,6 +293,8 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
     if (Date.now() - _rfkBootTime < 12000) return;
     for (const msg of chatUpdate.messages || []) {
       if (_rfkMarkSeen(msg?.key?.id)) continue;
+        const _mTs = Number(msg?.messageTimestamp || 0);
+        if (_mTs > 0 && (Math.floor(Date.now() / 1000) - _mTs) > 15) continue;
       const _rfkMsgTs = Number(msg.messageTimestamp || 0);
       if (_rfkMsgTs && (nowSec - _rfkMsgTs) > 25) continue;
         const keyCheck = JSON.stringify(msg.key || {});
