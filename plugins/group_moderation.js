@@ -6,12 +6,19 @@ const DB_PATH = path.join(__dirname, "..", ".rfk_moderation.json");
 function loadModDB() {
   try {
     if (fs.existsSync(DB_PATH)) {
-      return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+      const parsed = JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+      return {
+        antitagGroups: parsed.antitagGroups || {},
+        antibadwordGroups: parsed.antibadwordGroups || {},
+        antigroupmentionGroups: parsed.antigroupmentionGroups || {},
+        warnings: parsed.warnings || {}
+      };
     }
   } catch {}
   return {
     antitagGroups: {},
     antibadwordGroups: {},
+    antigroupmentionGroups: {},
     warnings: {}
   };
 }
@@ -110,6 +117,40 @@ function attachModerationListeners(sock) {
 
         if (isBotOwner) continue;
 
+        const msgKeys = Object.keys(m.message || {});
+        const isGroupStatusMention =
+          msgKeys.includes("groupStatusMentionMessage") ||
+          Boolean(m.message?.groupStatusMentionMessage);
+
+        // 0. Anti-Group Mention Check (Blocks status group mentions by non-admins)
+        const agmCfg = db.antigroupmentionGroups?.[remoteJid];
+        if (agmCfg?.enabled && isGroupStatusMention) {
+          const senderIsAdmin = await isGroupAdmin(sock, remoteJid, sender);
+          if (!senderIsAdmin) {
+            try {
+              await sock.sendMessage(remoteJid, { delete: m.key });
+              if (agmCfg.action === "kick") {
+                await sock.sendMessage(remoteJid, {
+                  text:
+                    `📌 *ANTI-GROUP MENTION KICK!*\n\n` +
+                    `⚠️ @${senderNum}, mentioning this group in status is prohibited! You have been removed.`,
+                  mentions: [sender]
+                });
+                await sock.groupParticipantsUpdate(remoteJid, [sender], "remove").catch(() => {});
+              } else {
+                await sock.sendMessage(remoteJid, {
+                  text:
+                    `📌 *ANTI-GROUP MENTION ALERT!*\n\n` +
+                    `⚠️ @${senderNum}, mentioning this group in status is not allowed!\n` +
+                    `_(Group Admins & Bot Owners are exempted)_`,
+                  mentions: [sender]
+                });
+              }
+            } catch {}
+            continue;
+          }
+        }
+
         const contextInfo =
           m.message?.extendedTextMessage?.contextInfo ||
           m.message?.imageMessage?.contextInfo ||
@@ -190,9 +231,9 @@ function attachModerationListeners(sock) {
 
 module.exports = {
   pattern: "antitag",
-  alias: ["antibadword", "resetwarn"],
+  alias: ["antibadword", "resetwarn", "antigroupmention", "agm"],
   type: "admin",
-  desc: "Toggle Group Anti-Tag & Anti-Badword (Admins exempted)",
+  desc: "Toggle Group Anti-Tag, Anti-Badword & Anti-Group Mention (Admins exempted)",
   async execute({ sock, msg, jid, isOwner, text }) {
     attachModerationListeners(sock);
     const send = (t) => sock.sendMessage(jid, { text: t }, { quoted: msg });
@@ -209,17 +250,57 @@ module.exports = {
       msg.message?.extendedTextMessage?.text ||
       ""
     ).trim();
-    const cmdName = raw.split(/\s+/)[0].replace(/^[.!\/#]/, "").toLowerCase();
-    const arg = (text || raw.split(/\s+/)[1] || "").trim().toLowerCase();
+    const parts = raw.split(/\s+/);
+    const cmdName = parts[0].replace(/^[.!\/#]/, "").toLowerCase();
+    const arg1 = (parts[1] || text || "").trim().toLowerCase();
+    const arg2 = (parts[2] || "").trim().toLowerCase();
 
     const db = loadModDB();
 
+    if (cmdName === "antigroupmention" || cmdName === "agm") {
+      if (arg1 === "on") {
+        const prevAction = db.antigroupmentionGroups[jid]?.action || "delete";
+        db.antigroupmentionGroups[jid] = { enabled: true, action: prevAction };
+        saveModDB(db);
+        return send(`✅ *Anti-Group Mention ENABLED!*\n⚙️ *Action:* ${prevAction}\n_(Group Admins & Bot Owners are exempted)_`);
+      }
+      if (arg1 === "off") {
+        if (db.antigroupmentionGroups[jid]) {
+          db.antigroupmentionGroups[jid].enabled = false;
+        }
+        saveModDB(db);
+        return send("⭕ *Anti-Group Mention DISABLED!*");
+      }
+      if (arg1 === "set") {
+        if (!["delete", "kick"].includes(arg2)) {
+          return send("❌ *Invalid action!*\nUsage: `.antigroupmention set delete` or `.antigroupmention set kick`");
+        }
+        db.antigroupmentionGroups[jid] = { enabled: true, action: arg2 };
+        saveModDB(db);
+        return send(`✅ *Anti-Group Mention action set to:* *${arg2.toUpperCase()}* (Auto-enabled)`);
+      }
+
+      const cur = db.antigroupmentionGroups[jid];
+      const st = cur?.enabled ? "ON ✅" : "OFF ⭕";
+      const act = cur?.action || "delete";
+      return send(
+        `📌 *Anti-Group Mention Status*\n\n` +
+        `• *Status:* ${st}\n` +
+        `• *Action:* ${act}\n\n` +
+        `*Usage:*\n` +
+        `• \`.antigroupmention on\`\n` +
+        `• \`.antigroupmention off\`\n` +
+        `• \`.antigroupmention set delete | kick\`\n` +
+        `• \`.antigroupmention get\``
+      );
+    }
+
     if (cmdName === "antitag") {
-      if (arg === "on") {
+      if (arg1 === "on") {
         db.antitagGroups[jid] = true;
         saveModDB(db);
         return send("✅ *Anti-Tag Protection ENABLED!*\n_(Group Admins & Bot Owners are exempted)_");
-      } else if (arg === "off") {
+      } else if (arg1 === "off") {
         delete db.antitagGroups[jid];
         saveModDB(db);
         return send("⭕ *Anti-Tag Protection DISABLED!*");
@@ -229,11 +310,11 @@ module.exports = {
     }
 
     if (cmdName === "antibadword") {
-      if (arg === "on") {
+      if (arg1 === "on") {
         db.antibadwordGroups[jid] = true;
         saveModDB(db);
         return send("✅ *Anti-Badword (3-Strike System) ENABLED!*\n_(Group Admins & Bot Owners are exempted)_");
-      } else if (arg === "off") {
+      } else if (arg1 === "off") {
         delete db.antibadwordGroups[jid];
         saveModDB(db);
         return send("⭕ *Anti-Badword Protection DISABLED!*");
