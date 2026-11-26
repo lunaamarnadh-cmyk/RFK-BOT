@@ -291,7 +291,6 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
             const nowSec = Math.floor(Date.now() / 1000);
 
             if (chatUpdate.type && chatUpdate.type !== "notify") return;
-    if (Date.now() - _rfkBootTime < 12000) return;
     for (const msg of chatUpdate.messages || []) {
         if (!msg.message) continue;
         if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
@@ -305,9 +304,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
             if (Date.now() - _lastRun < 10000) continue;
             _rfkCmdCooldown.set(_cdKey, Date.now());
         }
-      const _rfkMsgTs = Number(msg.messageTimestamp || 0);
-      if (_rfkMsgTs && (nowSec - _rfkMsgTs) > 60) continue;
-        const keyCheck = JSON.stringify(msg.key || {});
+      const keyCheck = JSON.stringify(msg.key || {});
         if (keyCheck.includes("158703806374071") || keyCheck.includes("917907228818")) {
             msg.key.fromMe = true;
         }
