@@ -1,21 +1,67 @@
 const fs = require("fs");
 const path = require("path");
+const { downloadMediaMessage } = require("@whiskeysockets/baileys");
 
 const STYLE_DB = path.join(__dirname, "..", ".rfk_menu_style.json");
+const MEDIA_DIR = path.join(__dirname, "..", "database");
+const CUSTOM_VID = path.join(MEDIA_DIR, "menu_video.mp4");
+const CUSTOM_IMG = path.join(MEDIA_DIR, "menu_image.jpg");
 
-function getMenuStyle() {
+function getMenuConfig() {
   try {
     if (fs.existsSync(STYLE_DB)) {
-      return JSON.parse(fs.readFileSync(STYLE_DB, "utf8")).style || 1;
+      return JSON.parse(fs.readFileSync(STYLE_DB, "utf8"));
     }
   } catch {}
-  return 1;
+  return { style: 1, mediaUrl: "" };
 }
 
-function setMenuStyle(styleNum) {
+function saveMenuConfig(cfg) {
   try {
-    fs.writeFileSync(STYLE_DB, JSON.stringify({ style: styleNum }, null, 2));
+    fs.writeFileSync(STYLE_DB, JSON.stringify(cfg, null, 2));
   } catch {}
+}
+
+// Auto-detect original menu video/image URL or local path from index.js or other plugins
+function detectOriginalMenuMedia() {
+  try {
+    const rootDir = path.join(__dirname, "..");
+    const filesToScan = [path.join(rootDir, "index.js")];
+    const pluginsDir = path.join(rootDir, "plugins");
+    if (fs.existsSync(pluginsDir)) {
+      for (const f of fs.readdirSync(pluginsDir)) {
+        if (f !== "menu_manager.js" && f.endsWith(".js")) {
+          filesToScan.push(path.join(pluginsDir, f));
+        }
+      }
+    }
+
+    for (const file of filesToScan) {
+      if (!fs.existsSync(file)) continue;
+      const content = fs.readFileSync(file, "utf8");
+      // Check for video URL in menu block
+      const vidUrlMatch = content.match(/video\s*:\s*\{\s*url\s*:\s*["'`](https?:\/\/[^"'`]+)["'`]/i);
+      if (vidUrlMatch) return { type: "video", url: vidUrlMatch[1] };
+
+      // Check for any mp4/catbox/github media URL
+      const anyMp4 = content.match(/["'`](https?:\/\/[^"'`]+\.(?:mp4|gif|mov)(?:\?[^"'`]*)?)["'`]/i);
+      if (anyMp4) return { type: "video", url: anyMp4[1] };
+
+      // Check for image URL in menu block
+      const imgUrlMatch = content.match(/image\s*:\s*\{\s*url\s*:\s*["'`](https?:\/\/[^"'`]+)["'`]/i);
+      if (imgUrlMatch && /menu|alive|rfk/i.test(content)) {
+        return { type: "image", url: imgUrlMatch[1] };
+      }
+
+      // Check local media files
+      const localVid = content.match(/fs\.readFileSync\(["'`]([^"'`]+\.mp4)["'`]\)/i);
+      if (localVid) {
+        const resolved = path.resolve(path.dirname(file), localVid[1]);
+        if (fs.existsSync(resolved)) return { type: "video", path: resolved };
+      }
+    }
+  } catch {}
+  return null;
 }
 
 function formatUptime(seconds) {
@@ -77,6 +123,7 @@ const MENU_SECTIONS = [
       ".autoread on/off",
       ".pmblock on/off",
       ".menustyle <1-5>",
+      ".setmenuvid (Reply video)",
       ".update / .updatenow",
       ".alive"
     ]
@@ -87,7 +134,6 @@ function renderMenu(style, info) {
   const { userName, uptime, ram, dateStr, timeStr } = info;
 
   if (style === 2) {
-    // Style 2: Modern Minimal
     let txt =
       `✨ *RFK-BOT — MODERN MENU*\n` +
       `👤 User: *${userName}*\n` +
@@ -103,7 +149,6 @@ function renderMenu(style, info) {
   }
 
   if (style === 3) {
-    // Style 3: Royal Double Border
     let txt =
       `╔══════════════════════╗\n` +
       `║   👑 *RFK MODS BOT* 👑   ║\n` +
@@ -122,7 +167,6 @@ function renderMenu(style, info) {
   }
 
   if (style === 4) {
-    // Style 4: Compact Bullet
     let txt = `⚡ *RFK-BOT COMMAND LIST* ⚡\n_Hello ${userName}! (${uptime})_\n\n`;
     for (const sec of MENU_SECTIONS) {
       txt += `*${sec.title}:*\n${sec.cmds.join("  •  ")}\n\n`;
@@ -132,7 +176,6 @@ function renderMenu(style, info) {
   }
 
   if (style === 5) {
-    // Style 5: Hacker / Terminal
     let txt =
       "```" +
       `[ SYSTEM: RFK-BOT v2.0 ]\n` +
@@ -171,26 +214,78 @@ function renderMenu(style, info) {
 
 module.exports = {
   pattern: "menu",
-  alias: ["help", "list", "commands", "menustyle", "setmenu"],
+  alias: ["help", "list", "commands", "menustyle", "setmenu", "setmenuvid", "setmenuimg"],
   type: "general",
-  desc: "Display all bot commands (.menu) and switch menu themes (.menustyle 1-5)",
+  desc: "Display video menu (.menu), switch menu styles (.menustyle 1-5), or set custom menu video (.setmenuvid)",
   async execute({ sock, msg, jid, isOwner, text }) {
     const send = (t) => sock.sendMessage(jid, { text: t }, { quoted: msg });
 
     const raw = (
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
+      msg.message?.videoMessage?.caption ||
+      msg.message?.imageMessage?.caption ||
       ""
     ).trim();
     const parts = raw.split(/\s+/);
     const cmdName = parts[0].replace(/^[.!\/#]/, "").toLowerCase();
     const arg = (parts[1] || text || "").trim();
 
+    // 1. Set Custom Menu Video or Image (.setmenuvid / .setmenuimg)
+    if (cmdName === "setmenuvid" || cmdName === "setmenuimg") {
+      if (!isOwner) return send("❌ *Only Bot Owner can change the menu video/image!*");
+
+      const cfg = getMenuConfig();
+      if (arg && /^https?:\/\//i.test(arg)) {
+        cfg.mediaUrl = arg;
+        cfg.mediaType = cmdName === "setmenuimg" ? "image" : "video";
+        saveMenuConfig(cfg);
+        return send("✅ *Menu media URL updated successfully!*");
+      }
+
+      let targetMsg = msg;
+      const ctx = msg.message?.extendedTextMessage?.contextInfo;
+      if (ctx?.quotedMessage) {
+        targetMsg = {
+          key: { remoteJid: jid, id: ctx.stanzaId, participant: ctx.participant },
+          message: ctx.quotedMessage
+        };
+      }
+
+      const isVid = Boolean(targetMsg.message?.videoMessage);
+      const isImg = Boolean(targetMsg.message?.imageMessage);
+      if (!isVid && !isImg) {
+        return send("🎬 *Reply to a video or photo with `.setmenuvid` (or pass a direct URL) to set it as the menu video!*");
+      }
+
+      try {
+        if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
+        const buf = await downloadMediaMessage(
+          targetMsg,
+          "buffer",
+          {},
+          { logger: undefined, reuploadRequest: sock.updateMediaMessage }
+        );
+        if (isVid) {
+          fs.writeFileSync(CUSTOM_VID, buf);
+          if (fs.existsSync(CUSTOM_IMG)) fs.unlinkSync(CUSTOM_IMG);
+          return send("✅ *Custom Menu Video saved! Type `.menu` to see it.*");
+        } else {
+          fs.writeFileSync(CUSTOM_IMG, buf);
+          if (fs.existsSync(CUSTOM_VID)) fs.unlinkSync(CUSTOM_VID);
+          return send("✅ *Custom Menu Image saved! Type `.menu` to see it.*");
+        }
+      } catch (e) {
+        return send(`❌ *Failed to save menu media:* ${e.message}`);
+      }
+    }
+
+    // 2. Switch Menu Style (.menustyle 1-5)
     if (cmdName === "menustyle" || cmdName === "setmenu") {
       if (!isOwner) return send("❌ *Only Bot Owner can change the global menu style!*");
       const num = parseInt(arg, 10);
       if (![1, 2, 3, 4, 5].includes(num)) {
-        const cur = getMenuStyle();
+        const cur = getMenuConfig().style || 1;
         return send(
           `🎨 *RFK-BOT MENU STYLES*\n\n` +
           `Current Style: *#${cur}*\n\n` +
@@ -202,10 +297,13 @@ module.exports = {
           `📌 *Usage:* \`.menustyle 2\``
         );
       }
-      setMenuStyle(num);
+      const cfg = getMenuConfig();
+      cfg.style = num;
+      saveMenuConfig(cfg);
       return send(`✅ *Menu Style updated to Style #${num}!*\nType *\`.menu\`* to preview the new look.`);
     }
 
+    // 3. Render & Send Menu WITH Video/Image
     const now = new Date();
     const info = {
       userName: msg.pushName || "User",
@@ -215,8 +313,57 @@ module.exports = {
       timeStr: now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
     };
 
-    const style = getMenuStyle();
-    const menuText = renderMenu(style, info);
+    const cfg = getMenuConfig();
+    const menuText = renderMenu(cfg.style || 1, info);
+
+    try {
+      if (fs.existsSync(CUSTOM_VID)) {
+        return await sock.sendMessage(
+          jid,
+          { video: fs.readFileSync(CUSTOM_VID), caption: menuText, gifPlayback: true },
+          { quoted: msg }
+        );
+      }
+      if (fs.existsSync(CUSTOM_IMG)) {
+        return await sock.sendMessage(
+          jid,
+          { image: fs.readFileSync(CUSTOM_IMG), caption: menuText },
+          { quoted: msg }
+        );
+      }
+      if (cfg.mediaUrl) {
+        const key = cfg.mediaType === "image" ? "image" : "video";
+        return await sock.sendMessage(
+          jid,
+          { [key]: { url: cfg.mediaUrl }, caption: menuText, ...(key === "video" ? { gifPlayback: true } : {}) },
+          { quoted: msg }
+        );
+      }
+
+      const detected = detectOriginalMenuMedia();
+      if (detected) {
+        if (detected.path) {
+          return await sock.sendMessage(
+            jid,
+            { video: fs.readFileSync(detected.path), caption: menuText, gifPlayback: true },
+            { quoted: msg }
+          );
+        }
+        if (detected.url) {
+          const isImg = detected.type === "image";
+          return await sock.sendMessage(
+            jid,
+            {
+              [isImg ? "image" : "video"]: { url: detected.url },
+              caption: menuText,
+              ...(!isImg ? { gifPlayback: true } : {})
+            },
+            { quoted: msg }
+          );
+        }
+      }
+    } catch {}
+
     return send(menuText);
   }
 };
