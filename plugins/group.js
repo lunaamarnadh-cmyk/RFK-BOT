@@ -92,16 +92,20 @@ module.exports = [
         pattern: "mode",
         type: "manage",
         async execute({ text, reply, isOwner }) {
-            if (!isOwner) return;
-            if (text.toLowerCase() === "public") {
-                config.MODE = "public";
-                return reply("🌍 *RFK BOT ഇപ്പോൾ PUBLIC MODE ആണ്!* (എല്ലാവർക്കും കമാൻഡുകൾ ഉപയോഗിക്കാം)");
+            if (!isOwner) return reply("❌ *This command is only for the Bot Owner!*");
+            const val = (text || "").trim().toLowerCase();
+            if (val === "public" || val === "private") {
+                config.MODE = val;
+                process.env.MODE = val;
+                try { fs.writeFileSync("./.rfk_mode.json", JSON.stringify({ mode: val })); } catch {}
+                return reply(
+                    val === "private"
+                        ? "🔒 *RFK BOT is now in PRIVATE MODE!* (Owner & Sudo only)"
+                        : "🌐 *RFK BOT is now in PUBLIC MODE!* (Everyone can use commands)"
+                );
             }
-            if (text.toLowerCase() === "private") {
-                config.MODE = "private";
-                return reply("🔒 *RFK BOT is currently in PRIVATE MODE!* (Owner only)");
-            }
-            return reply(`നിലവിലെ മോഡ്: *${(config.MODE || "private").toUpperCase()}*\nമാറ്റാൻ: \`.mode public\` അല്ലെങ്കിൽ \`.mode private\``);
+            const cur = (config.MODE || process.env.MODE || "public").toUpperCase();
+            return reply("⚙️ *Current Mode:* *" + cur + "*\n\nUse *.mode public* or *.mode private* to change.");
         }
     },
 
