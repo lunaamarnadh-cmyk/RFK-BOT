@@ -383,6 +383,7 @@ const _rfkBootTime = Date.now();
 const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
+  console.log("DEBUG_MSG:", chatUpdate.type, JSON.stringify((chatUpdate.messages||[]).map(m => ({fromMe: m.key?.fromMe, jid: m.key?.remoteJid, txt: m.message?.conversation || m.message?.extendedTextMessage?.text}))));
             const _rfkAllowSelfAppend = true;
     const _hasFreshSelf = (chatUpdate.messages || []).some(m => m?.key?.fromMe);
     
@@ -435,6 +436,9 @@ if (msg.message?.deviceSentMessage?.message) msg.message = msg.message.deviceSen
 
 const jid = msg.key.remoteJid;
                 if (!jid) continue;
+if (msg.key.fromMe && jid.endsWith("@lid")) {
+  msg.key.remoteJid = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+}
 
                 if (jid === "status@broadcast") {
                     for (const evPlugin of eventPlugins) {
