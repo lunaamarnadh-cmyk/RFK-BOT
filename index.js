@@ -246,6 +246,16 @@ sock.sendMessage = async (jid, content, opts) => {
 try { require("./plugins/smart_features"); } catch {}
     try { require("./plugins/group_guard"); } catch {}
     try { require("./plugins/auto_features"); } catch {}
+    const _origSend = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (jid, content, options) => {
+      const _rfkDeadIpGuard = true;
+      const str = JSON.stringify(content || {});
+      if (str.includes("108.181.20.43")) {
+        const cap = content?.caption || content?.text || "✅ RFK-BOT Online";
+        return _origSend(jid, { text: cap }, options);
+      }
+      return _origSend(jid, content, options);
+    };
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
