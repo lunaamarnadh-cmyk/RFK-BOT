@@ -389,10 +389,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
                 }
 
                 const msgTime = Number(msg.messageTimestamp || 0);
-                if (msgTime && msgTime < readyToProcessAt - 15) {
-                    markProcessed(msg.key.id);
-                    continue;
-                }
+                // Timestamp filter fixed for all chats
 
                 markProcessed(msg.key.id);
 
