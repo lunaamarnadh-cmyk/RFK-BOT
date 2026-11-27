@@ -1,43 +1,4 @@
 
-// _rfkGlobalDeadIpRedirect: Reroute dead files.catbox.moe media URLs at HTTP/HTTPS & Socket level
-(function() {
-  const http = require("http");
-  const https = require("https");
-  const origHttpsGet = https.get.bind(https);
-  const origHttpsReq = https.request.bind(https);
-  const origHttpGet = http.get.bind(http);
-  const origHttpReq = http.request.bind(http);
-
-  function fixTarget(arg) {
-    if (typeof arg === "string" && arg.includes("files.catbox.moe")) {
-      return "https://files.catbox.moe/3v5x9m.mp4";
-    }
-    if (arg && typeof arg === "object") {
-      const host = arg.hostname || arg.host || "";
-      if (String(host).includes("files.catbox.moe")) {
-        return "https://files.catbox.moe/3v5x9m.mp4";
-      }
-    }
-    return arg;
-  }
-
-  https.get = function(url, opts, cb) { return origHttpsGet(fixTarget(url), opts, cb); };
-  https.request = function(url, opts, cb) { return origHttpsReq(fixTarget(url), opts, cb); };
-  http.get = function(url, opts, cb) {
-    const fixed = fixTarget(url);
-    return typeof fixed === "string" && fixed.startsWith("https://")
-      ? origHttpsGet(fixed, opts, cb)
-      : origHttpGet(fixed, opts, cb);
-  };
-  http.request = function(url, opts, cb) {
-    const fixed = fixTarget(url);
-    return typeof fixed === "string" && fixed.startsWith("https://")
-      ? origHttpsReq(fixed, opts, cb)
-      : origHttpReq(fixed, opts, cb);
-  };
-})();
-
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -255,20 +216,8 @@ async function startBot() {
             generateHighQualityLinkPreview: false,
             getMessage: async () => ({ conversation: "" })
         });
-    const _rfkSafeSendWrapped = true;
-    const _origSockSend = sock.sendMessage.bind(sock);
-    sock.sendMessage = async function(jid, content, options) {
-      try {
-        return await _origSockSend(jid, content, options);
-      } catch (err) {
-        const cap = content?.caption || content?.text;
-        if (cap && (content?.image || content?.video || content?.audio || content?.document)) {
-          return await _origSockSend(jid, { text: cap, mentions: content.mentions }, options);
-        }
-        throw err;
-      }
-    };
-sock.ev.on("creds.update", saveCreds);
+
+        sock.ev.on("creds.update", saveCreds);
 
         
 const origSend = sock.sendMessage.bind(sock);
@@ -301,7 +250,7 @@ try { require("./plugins/smart_features"); } catch {}
     sock.sendMessage = async (jid, content, options) => {
       const _rfkDeadIpGuard = true;
       const str = JSON.stringify(content || {});
-      if (str.includes("files.catbox.moe")) {
+      if (str.includes("108.181.20.43")) {
         const cap = content?.caption || content?.text || "✅ RFK-BOT Online";
         return _origSend(jid, { text: cap }, options);
       }
@@ -350,18 +299,12 @@ const _rfkBootTime = Date.now();
 const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
-            const _rfkAllowSelfAppend = true;
-    const _hasFreshSelf = (chatUpdate.messages || []).some(m => m?.key?.fromMe);
-    if (chatUpdate.type !== "notify" && !_hasFreshSelf) return;
+            if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
             if (chatUpdate.type && chatUpdate.type !== "notify") return;
-    const _rfkStrictFreshGuard = true;
-    const _bootSec = Math.floor(_rfkBootTime / 1000);
     for (const msg of chatUpdate.messages || []) {
-      const _ts = Number(msg?.messageTimestamp || 0);
-      if (_ts > 0 && (_ts < _bootSec - 3 || (Math.floor(Date.now() / 1000) - _ts) > 15)) continue;
         if (!msg.message) continue;
         if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
         if (_rfkMarkSeen(msg?.key?.id)) continue;
@@ -371,7 +314,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
         if (_rawTxt.startsWith(".")) {
             const _cdKey = (msg.key?.remoteJid || "") + "::" + _rawTxt;
             const _lastRun = _rfkCmdCooldown.get(_cdKey) || 0;
-            if (Date.now() - _lastRun < 1500) continue;
+            if (Date.now() - _lastRun < 10000) continue;
             _rfkCmdCooldown.set(_cdKey, Date.now());
         }
       const keyCheck = JSON.stringify(msg.key || {});
@@ -474,19 +417,7 @@ const keyStr = JSON.stringify(msg.key || {});
                     }
                 }
 
-  const _rfkMasterOwnerBypass = true;
-    const _botNum = (sock.user?.id || "").split(":")[0].split("@")[0];
-    const _botLid = (sock.user?.lid || "").split(":")[0].split("@")[0];
-    const _remNum = (jid || "").split(":")[0].split("@")[0];
-    const _sndNum2 = (sender || "").split(":")[0].split("@")[0];
-    if (
-      msg?.key?.fromMe ||
-      (_botNum && (_remNum === _botNum || _sndNum2 === _botNum)) ||
-      (_botLid && (_remNum === _botLid || _sndNum2 === _botLid))
-    ) {
-      isOwner = true;
-    }
-    const trimmed = body.trim();
+  const trimmed = body.trim();
                 if (!trimmed) continue;
 const hasPrefix = trimmed.startsWith(PREFIX);
 const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
@@ -496,19 +427,7 @@ const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 if (!cmd) continue;
 
                 if (!hasPrefix && !isOwner) continue;
-const _rfkLidOwnerFix = true;
-    const _myLid = (sock.user?.lid || "").split(":")[0].split("@")[0];
-    const _myNum = (sock.user?.id || "").split(":")[0].split("@")[0];
-    const _jidNum = (jid || "").split(":")[0].split("@")[0];
-    const _sndNum = (sender || "").split(":")[0].split("@")[0];
-    if (
-      msg?.key?.fromMe ||
-      (_myNum && (_jidNum === _myNum || _sndNum === _myNum)) ||
-      (_myLid && (_jidNum === _myLid || _sndNum === _myLid))
-    ) {
-      isOwner = true;
-    }
-    if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
+if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
                 const text = args.join(" ");
 
                 try {
