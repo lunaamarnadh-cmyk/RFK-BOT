@@ -1,5 +1,5 @@
 
-// _rfkGlobalDeadIpRedirect: Reroute dead 108.181.20.43 media URLs at HTTP/HTTPS & Socket level
+// _rfkGlobalDeadIpRedirect: Reroute dead files.catbox.moe media URLs at HTTP/HTTPS & Socket level
 (function() {
   const http = require("http");
   const https = require("https");
@@ -9,12 +9,12 @@
   const origHttpReq = http.request.bind(http);
 
   function fixTarget(arg) {
-    if (typeof arg === "string" && arg.includes("108.181.20.43")) {
+    if (typeof arg === "string" && arg.includes("files.catbox.moe")) {
       return "https://files.catbox.moe/3v5x9m.mp4";
     }
     if (arg && typeof arg === "object") {
       const host = arg.hostname || arg.host || "";
-      if (String(host).includes("108.181.20.43")) {
+      if (String(host).includes("files.catbox.moe")) {
         return "https://files.catbox.moe/3v5x9m.mp4";
       }
     }
@@ -237,7 +237,25 @@ async function startBot() {
         const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
         const { version } = await fetchLatestBaileysVersion();
 
-        const sock = makeWASocket({
+        const _rfkUnbreakableSend = true;
+    const _rawMakeWASocket = makeWASocket;
+    makeWASocket = function(cfg) {
+      const s = _rawMakeWASocket(cfg);
+      const _origSend = s.sendMessage.bind(s);
+      s.sendMessage = async function(jid, content, options) {
+        try {
+          return await _origSend(jid, content, options);
+        } catch (err) {
+          const cap = content?.caption || content?.text;
+          if (cap && (content?.image || content?.video || content?.audio || content?.document)) {
+            return await _origSend(jid, { text: cap, mentions: content.mentions }, options);
+          }
+          throw err;
+        }
+      };
+      return s;
+    };
+    const sock = makeWASocket({
             version,
             logger: pino({ level: "silent" }),
             printQRInTerminal: false,
@@ -289,7 +307,7 @@ try { require("./plugins/smart_features"); } catch {}
     sock.sendMessage = async (jid, content, options) => {
       const _rfkDeadIpGuard = true;
       const str = JSON.stringify(content || {});
-      if (str.includes("108.181.20.43")) {
+      if (str.includes("files.catbox.moe")) {
         const cap = content?.caption || content?.text || "✅ RFK-BOT Online";
         return _origSend(jid, { text: cap }, options);
       }
