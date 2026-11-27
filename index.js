@@ -256,8 +256,6 @@ try { require("./plugins/smart_features"); } catch {}
       }
       return _origSend(jid, content, options);
     };
-    try { require("./plugins/anti_owner_kick"); } catch {}
-    try { require("./plugins/prefix_manager"); } catch {}
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
@@ -301,11 +299,11 @@ const _rfkBootTime = Date.now();
 const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
-            if (chatUpdate.type !== "notify" && !(chatUpdate.messages || []).some(m => m?.key?.fromMe && m?.message)) return;
+            if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
-            if (chatUpdate.type && chatUpdate.type !== "notify" && !(chatUpdate.messages || []).some(m => m?.key?.fromMe && m?.message)) return;
+            if (chatUpdate.type && chatUpdate.type !== "notify") return;
     for (const msg of chatUpdate.messages || []) {
         if (!msg.message) continue;
         if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
@@ -345,7 +343,6 @@ if (msg.message?.ephemeralMessage?.message) msg.message = msg.message.ephemeralM
 if (msg.message?.viewOnceMessage?.message) msg.message = msg.message.viewOnceMessage.message;
 if (msg.message?.viewOnceMessageV2?.message) msg.message = msg.message.viewOnceMessageV2.message;
 if (msg.message?.deviceSentMessage?.message) msg.message = msg.message.deviceSentMessage.message;
-      try { if (global._rfkNormalizePrefix) global._rfkNormalizePrefix(msg); } catch {}
 
 const jid = msg.key.remoteJid;
                 if (!jid) continue;
