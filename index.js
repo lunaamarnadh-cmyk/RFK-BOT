@@ -87,7 +87,6 @@ function loadPlugins() {
 
     const files = fs.readdirSync(pluginDir).filter((f) => f.endsWith(".js"));
     for (const file of files) {
-      try { if (global._rfkNormalizePrefix) global._rfkNormalizePrefix(file); } catch {}
         try {
             delete require.cache[require.resolve(path.join(pluginDir, file))];
             const plugin = require(path.join(pluginDir, file));
@@ -302,7 +301,7 @@ const _rfkBootTime = Date.now();
 const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
-            const _rfkSelfChatFix = true; if (chatUpdate.type !== "notify" && !(chatUpdate.messages || []).some(m => m?.key?.fromMe && m?.message)) return;
+            if (chatUpdate.type !== "notify") return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
