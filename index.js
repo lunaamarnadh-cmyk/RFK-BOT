@@ -469,7 +469,7 @@ const jid = msg.key.remoteJid;
                 const rawParticipant = JSON.stringify(msg.key || {});
 const keyStr = JSON.stringify(msg.key || {});
         const _rfkExtraOwners = ["918086165391", "917907228818"];
-        const isOwner = (() => {
+        let isOwner = (() => {
       const _rfkAutoDeployerOwner = true;
       if (msg?.key?.fromMe) return true;
       const botBase = (sock?.user?.id || "").split(":")[0].split("@")[0];
