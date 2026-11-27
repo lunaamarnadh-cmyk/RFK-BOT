@@ -495,7 +495,7 @@ const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 const cmd = commands.get(cmdName);
                 if (!cmd) continue;
 
-                if (!hasPrefix && !isOwner) continue;
+                
 const _rfkLidOwnerFix = true;
     const _myLid = (sock.user?.lid || "").split(":")[0].split("@")[0];
     const _myNum = (sock.user?.id || "").split(":")[0].split("@")[0];
@@ -508,6 +508,7 @@ const _rfkLidOwnerFix = true;
     ) {
       isOwner = true;
     }
+    if (!hasPrefix && !isOwner) continue;
     if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
                 const text = args.join(" ");
 
