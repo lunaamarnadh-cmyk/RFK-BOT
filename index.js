@@ -216,13 +216,12 @@ async function sendConnectNotification(sock) {
             `📋 കമാൻഡുകൾ കാണാൻ *\`${PREFIX}menu\`* അയക്കുക.\n` +
             `⚡ *Powered by 𝐑𝐅𝐊 𝐌𝐎𝐃𝐒*`;
 
-        await sock.sendMessage(myJid, {
+        if(!global._rfkSentConnMsg){global._rfkSentConnMsg=true;await sock.sendMessage(myJid, {
             video: { url: CONNECT_VIDEO_URL },
             gifPlayback: true,
             caption
         }).catch(async () => {
-            await sock.sendMessage(myJid, { text: caption });
-        });
+            await sock.sendMessage(myJid, { text: caption });});}
     } catch (err) {
         console.log("⚠️ Connect notification error:", err.message);
     }
