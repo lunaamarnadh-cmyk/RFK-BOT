@@ -1,4 +1,37 @@
 
+function _rfkCleanCorruptSession() {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const dirs = ["./session", "./auth_info", "./auth_info_baileys", "."];
+    for (const d of dirs) {
+      if (!fs.existsSync(d)) continue;
+      for (const f of fs.readdirSync(d)) {
+        if (f.startsWith("session-") || f.startsWith("pre-key-") || f.startsWith("sender-key-")) {
+          try { fs.unlinkSync(path.join(d, f)); } catch {}
+        }
+      }
+    }
+  } catch {}
+}
+const _rfkOrigConsoleErr = console.error;
+let _rfkBadMacTimer = null;
+console.error = function(...args) {
+  const s = args.map(a => (a && a.stack) ? a.stack : String(a)).join(" ");
+  if (s.includes("Bad MAC") || s.includes("verifyMAC") || s.includes("Failed to decrypt")) {
+    if (!_rfkBadMacTimer) {
+      _rfkBadMacTimer = setTimeout(() => {
+        _rfkCleanCorruptSession();
+        _rfkBadMacTimer = null;
+      }, 3000);
+    }
+    return;
+  }
+  return _rfkOrigConsoleErr.apply(console, args);
+};
+const _rfkBadMacClean = true;
+
+
 // _rfkGlobalDeadIpRedirect: Reroute dead files.catbox.moe media URLs at HTTP/HTTPS & Socket level
 (function() {
   const http = require("http");
