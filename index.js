@@ -237,25 +237,7 @@ async function startBot() {
         const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
         const { version } = await fetchLatestBaileysVersion();
 
-        const _rfkUnbreakableSend = true;
-    const _rawMakeWASocket = makeWASocket;
-    makeWASocket = function(cfg) {
-      const s = _rawMakeWASocket(cfg);
-      const _origSend = s.sendMessage.bind(s);
-      s.sendMessage = async function(jid, content, options) {
-        try {
-          return await _origSend(jid, content, options);
-        } catch (err) {
-          const cap = content?.caption || content?.text;
-          if (cap && (content?.image || content?.video || content?.audio || content?.document)) {
-            return await _origSend(jid, { text: cap, mentions: content.mentions }, options);
-          }
-          throw err;
-        }
-      };
-      return s;
-    };
-    const sock = makeWASocket({
+        const sock = makeWASocket({
             version,
             logger: pino({ level: "silent" }),
             printQRInTerminal: false,
@@ -273,8 +255,20 @@ async function startBot() {
             generateHighQualityLinkPreview: false,
             getMessage: async () => ({ conversation: "" })
         });
-
-        sock.ev.on("creds.update", saveCreds);
+    const _rfkSafeSendWrapped = true;
+    const _origSockSend = sock.sendMessage.bind(sock);
+    sock.sendMessage = async function(jid, content, options) {
+      try {
+        return await _origSockSend(jid, content, options);
+      } catch (err) {
+        const cap = content?.caption || content?.text;
+        if (cap && (content?.image || content?.video || content?.audio || content?.document)) {
+          return await _origSockSend(jid, { text: cap, mentions: content.mentions }, options);
+        }
+        throw err;
+      }
+    };
+sock.ev.on("creds.update", saveCreds);
 
         
 const origSend = sock.sendMessage.bind(sock);
