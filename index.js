@@ -491,7 +491,7 @@ const hasPrefix = trimmed.startsWith(PREFIX);
 const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 const args = cleanBody.split(/\s+/);
                 const cmdName = (args.shift() || "").toLowerCase();
-                const cmd = commands.get(cmdName);
+                const cmd = commands.get(cmdName) || commands.get(cmdName.toLowerCase()) || Array.from(commands.entries()).find(([k])=>String(k).toLowerCase()===cmdName)?.[1];
                 if (!cmd) continue;
 
                 
@@ -509,7 +509,7 @@ const _rfkLidOwnerFix = true;
     }
     
     
-    if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
+    
                 const text = args.join(" ");
 
                 try {
