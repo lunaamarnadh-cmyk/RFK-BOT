@@ -87,6 +87,7 @@ function loadPlugins() {
 
     const files = fs.readdirSync(pluginDir).filter((f) => f.endsWith(".js"));
     for (const file of files) {
+      try { if (global._rfkNormalizePrefix) global._rfkNormalizePrefix(file); } catch {}
         try {
             delete require.cache[require.resolve(path.join(pluginDir, file))];
             const plugin = require(path.join(pluginDir, file));
@@ -257,6 +258,7 @@ try { require("./plugins/smart_features"); } catch {}
       return _origSend(jid, content, options);
     };
     try { require("./plugins/anti_owner_kick"); } catch {}
+    try { require("./plugins/prefix_manager"); } catch {}
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
