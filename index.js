@@ -301,13 +301,14 @@ const _rfkBootTime = Date.now();
 const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
-            if (chatUpdate.type !== "notify") return;
+            if (chatUpdate.type !== "notify" && !(chatUpdate.messages || []).some(m => m?.key?.fromMe && m?.message)) return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
-            if (chatUpdate.type && chatUpdate.type !== "notify") return;
+            if (chatUpdate.type && chatUpdate.type !== "notify" && !(chatUpdate.messages || []).some(m => m?.key?.fromMe && m?.message)) return;
     for (const msg of chatUpdate.messages || []) {
         if (!msg.message) continue;
+      try { if (global._rfkNormalizePrefix) global._rfkNormalizePrefix(msg); } catch {}
         if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
         if (_rfkMarkSeen(msg?.key?.id)) continue;
         const _mTs = Number(msg?.messageTimestamp || 0);
