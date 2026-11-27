@@ -504,6 +504,7 @@ const _rfkLidOwnerFix = true;
     ) {
       isOwner = true;
     }
+    
     if (!hasPrefix && !isOwner) continue;
     if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
                 const text = args.join(" ");
