@@ -470,7 +470,19 @@ const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 if (!cmd) continue;
 
                 if (!hasPrefix && !isOwner) continue;
-if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
+const _rfkLidOwnerFix = true;
+    const _myLid = (sock.user?.lid || "").split(":")[0].split("@")[0];
+    const _myNum = (sock.user?.id || "").split(":")[0].split("@")[0];
+    const _jidNum = (jid || "").split(":")[0].split("@")[0];
+    const _sndNum = (sender || "").split(":")[0].split("@")[0];
+    if (
+      msg?.key?.fromMe ||
+      (_myNum && (_jidNum === _myNum || _sndNum === _myNum)) ||
+      (_myLid && (_jidNum === _myLid || _sndNum === _myLid))
+    ) {
+      isOwner = true;
+    }
+    if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
                 const text = args.join(" ");
 
                 try {
