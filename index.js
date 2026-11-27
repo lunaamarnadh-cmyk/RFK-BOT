@@ -152,12 +152,19 @@ async function restoreSession() {
     const sessionEnv = process.env.SESSION_ID;
     const credsPath = path.join(SESSION_DIR, "creds.json");
 
-    if (fs.existsSync(credsPath)) {
-        console.log("✅ Existing session folder found, keeping encryption keys intact.");
-        return;
-    }
+    const sessionMarker = path.join(SESSION_DIR, ".session_id");
+  const prevId = fs.existsSync(sessionMarker) ? fs.readFileSync(sessionMarker, "utf8").trim() : "";
+  if (fs.existsSync(credsPath) && sessionEnv && prevId === sessionEnv.trim()) {
+    console.log("✅ Matching session found, keeping encryption keys intact.");
+    return;
+  }
+  if (fs.existsSync(SESSION_DIR)) {
+    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+    console.log("🔄 New or updated SESSION_ID detected — cleared stale encryption keys!");
+  }
 
     fs.mkdirSync(SESSION_DIR, { recursive: true });
+  if (sessionEnv) { try { fs.writeFileSync(path.join(SESSION_DIR, ".session_id"), sessionEnv.trim()); } catch {} }
 
     if (sessionEnv && sessionEnv.startsWith("RFK-BOT~")) {
         const rawData = sessionEnv.replace("RFK-BOT~", "").trim();
