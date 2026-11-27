@@ -249,7 +249,20 @@ try { require("./plugins/smart_features"); } catch {}
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
-            if (connection === "open") {
+            if (connection === "open" && (() => {
+      if (!global._rfkConnectNotified) {
+        global._rfkConnectNotified = true;
+        setTimeout(async () => {
+          try {
+            const ownerJid = (sock.user?.id?.split(":")[0] || "918086165391") + "@s.whatsapp.net";
+            await sock.sendMessage(ownerJid, {
+              text: "✅ *RFK-BOT CONNECTED & ONLINE!* 🔥\n\n⚡ Server: Render Cloud\n📌 Type *.menu* or *.alive* to test."
+            });
+          } catch {}
+        }, 2500);
+      }
+      return true;
+    })()) {
                 isConnecting = false;
                 readyToProcessAt = Math.floor(Date.now() / 1000) + 2;
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
