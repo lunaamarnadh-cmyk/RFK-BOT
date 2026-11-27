@@ -314,7 +314,7 @@ try { require("./plugins/smart_features"); } catch {}
                 isConnecting = false;
                 readyToProcessAt = Math.floor(Date.now() / 1000) + 2;
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
-                sendConnectNotification(sock);
+                if (!process.env._RFK_NOTIFIED) { process.env._RFK_NOTIFIED = "1"; sendConnectNotification(sock); }
             } else if (connection === "close") {
                 isConnecting = false;
                 readyToProcessAt = Infinity;
@@ -379,6 +379,8 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
             msg.key.fromMe = true;
         }
                 if (!msg || !msg.message || !msg.key?.id) continue;
+      const _txtCheck = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.videoMessage?.caption || "";
+      if (_txtCheck.includes("Connected & Updated!") || _txtCheck.includes("Powered by RFK MODS")) continue;
 
                 if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
                 if (processedMsgs.has(msg.key.id)) continue;
