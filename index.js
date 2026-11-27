@@ -1,4 +1,43 @@
 
+// _rfkGlobalDeadIpRedirect: Reroute dead 108.181.20.43 media URLs at HTTP/HTTPS & Socket level
+(function() {
+  const http = require("http");
+  const https = require("https");
+  const origHttpsGet = https.get.bind(https);
+  const origHttpsReq = https.request.bind(https);
+  const origHttpGet = http.get.bind(http);
+  const origHttpReq = http.request.bind(http);
+
+  function fixTarget(arg) {
+    if (typeof arg === "string" && arg.includes("108.181.20.43")) {
+      return "https://files.catbox.moe/3v5x9m.mp4";
+    }
+    if (arg && typeof arg === "object") {
+      const host = arg.hostname || arg.host || "";
+      if (String(host).includes("108.181.20.43")) {
+        return "https://files.catbox.moe/3v5x9m.mp4";
+      }
+    }
+    return arg;
+  }
+
+  https.get = function(url, opts, cb) { return origHttpsGet(fixTarget(url), opts, cb); };
+  https.request = function(url, opts, cb) { return origHttpsReq(fixTarget(url), opts, cb); };
+  http.get = function(url, opts, cb) {
+    const fixed = fixTarget(url);
+    return typeof fixed === "string" && fixed.startsWith("https://")
+      ? origHttpsGet(fixed, opts, cb)
+      : origHttpGet(fixed, opts, cb);
+  };
+  http.request = function(url, opts, cb) {
+    const fixed = fixTarget(url);
+    return typeof fixed === "string" && fixed.startsWith("https://")
+      ? origHttpsReq(fixed, opts, cb)
+      : origHttpReq(fixed, opts, cb);
+  };
+})();
+
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
