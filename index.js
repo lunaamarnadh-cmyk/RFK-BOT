@@ -249,20 +249,7 @@ try { require("./plugins/smart_features"); } catch {}
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
-            if (connection === "open" && (() => {
-      if (!global._rfkConnectNotified) {
-        global._rfkConnectNotified = true;
-        setTimeout(async () => {
-          try {
-            const ownerJid = (sock.user?.id?.split(":")[0] || "918086165391") + "@s.whatsapp.net";
-            await sock.sendMessage(ownerJid, {
-              text: "✅ *RFK-BOT CONNECTED & ONLINE!* 🔥\n\n⚡ Server: Render Cloud\n📌 Type *.menu* or *.alive* to test."
-            });
-          } catch {}
-        }, 2500);
-      }
-      return true;
-    })()) {
+            if (connection === "open") {
                 isConnecting = false;
                 readyToProcessAt = Math.floor(Date.now() / 1000) + 2;
                 console.log("✅ 乂𝐑𝐅𝐊 𝐁𝐎𝐓乂 Connected! Live processing starts in 15s...");
@@ -383,7 +370,7 @@ const jid = msg.key.remoteJid;
                 const rawParticipant = JSON.stringify(msg.key || {});
 const keyStr = JSON.stringify(msg.key || {});
         const _rfkExtraOwners = ["918086165391", "917907228818"];
-        const _rfkLidFix = true; const isOwner = m.key.fromMe ||  _rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER));
+        const isOwner = (m?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER)))) /* _rfkSelfChatOk */;
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
