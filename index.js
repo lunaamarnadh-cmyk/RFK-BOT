@@ -350,7 +350,9 @@ const _rfkBootTime = Date.now();
 const _rfkCmdCooldown = new Map();
 
 sock.ev.on("messages.upsert", async (chatUpdate) => {
-            if (chatUpdate.type !== "notify") return;
+            const _rfkAllowSelfAppend = true;
+    const _hasFreshSelf = (chatUpdate.messages || []).some(m => m?.key?.fromMe);
+    if (chatUpdate.type !== "notify" && !_hasFreshSelf) return;
 
             const nowSec = Math.floor(Date.now() / 1000);
 
