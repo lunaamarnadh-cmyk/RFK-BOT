@@ -308,7 +308,6 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
             if (chatUpdate.type && chatUpdate.type !== "notify" && !(chatUpdate.messages || []).some(m => m?.key?.fromMe && m?.message)) return;
     for (const msg of chatUpdate.messages || []) {
         if (!msg.message) continue;
-      try { if (global._rfkNormalizePrefix) global._rfkNormalizePrefix(msg); } catch {}
         if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
         if (_rfkMarkSeen(msg?.key?.id)) continue;
         const _mTs = Number(msg?.messageTimestamp || 0);
@@ -346,6 +345,7 @@ if (msg.message?.ephemeralMessage?.message) msg.message = msg.message.ephemeralM
 if (msg.message?.viewOnceMessage?.message) msg.message = msg.message.viewOnceMessage.message;
 if (msg.message?.viewOnceMessageV2?.message) msg.message = msg.message.viewOnceMessageV2.message;
 if (msg.message?.deviceSentMessage?.message) msg.message = msg.message.deviceSentMessage.message;
+      try { if (global._rfkNormalizePrefix) global._rfkNormalizePrefix(msg); } catch {}
 
 const jid = msg.key.remoteJid;
                 if (!jid) continue;
