@@ -119,29 +119,7 @@ async function downloadAndApplyUpdate(latest, onSuccess, onError) {
   });
 }
 
-// Background Auto-Updater (checks every 10 minutes)
-if (!global._rfkAutoUpdaterStarted) {
-  global._rfkAutoUpdaterStarted = true;
-  setInterval(async () => {
-    try {
-      const latest = await getLatestCommit();
-      const currentSha = getCurrentSha();
-
-      if (!currentSha) {
-        fs.writeFileSync(VERSION_FILE, latest.sha);
-        return;
-      }
-
-      if (currentSha !== latest.sha) {
-        await downloadAndApplyUpdate(
-          latest,
-          async () => fastRestart(null),
-          () => {}
-        );
-      }
-    } catch {}
-  }, 10 * 60 * 1000);
-}
+// Manual update only via .updatenow
 
 module.exports = {
   pattern: "update",

@@ -326,16 +326,10 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
                 if (msg.message.protocolMessage || msg.message.senderKeyDistributionMessage) continue;
                 if (processedMsgs.has(msg.key.id)) continue;
 
-                if (nowSec < readyToProcessAt) {
-                    markProcessed(msg.key.id);
-                    continue;
-                }
+                
 
                 const msgTime = Number(msg.messageTimestamp || 0);
-                if (msgTime && msgTime < readyToProcessAt - 15) {
-                    markProcessed(msg.key.id);
-                    continue;
-                }
+                
 
                 markProcessed(msg.key.id);
 
@@ -426,7 +420,7 @@ const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
                 const cmd = commands.get(cmdName);
                 if (!cmd) continue;
 
-                if (!hasPrefix && !isOwner) continue;
+                // Allow both prefixed (.menu) and no-prefix (menu) for all users
 if (String(MODE).toLowerCase() === "private" && !isOwner) continue;
                 const text = args.join(" ");
 
