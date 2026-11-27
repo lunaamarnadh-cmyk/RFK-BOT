@@ -91,13 +91,13 @@ module.exports = [
 
             try {
                 if (fs.existsSync(vidPath)) {
-                    await (async () => { try { await sock.sendMessage(jid, { video: fs.readFileSync(vidPath),  caption: menuText  }, { quoted: msg }); } catch (e) { const cap = ({ fs.readFileSync(vidPath),  caption: menuText }).caption || ""; await sock.sendMessage(jid, { text: cap }, { quoted: msg }); } })();
+                    await sock.sendMessage(jid, { video: fs.readFileSync(vidPath),  caption: menuText }, { quoted: msg });
                 } else if (fs.existsSync(imgPath)) {
                     await sock.sendMessage(jid, { image: fs.readFileSync(imgPath), caption: menuText }, { quoted: msg });
                 } else if (DEFAULT_URL) {
                     const isVideo = /\.(mp4|gif|mkv|webm)(\?.*)?$/i.test(DEFAULT_URL);
                     if (isVideo) {
-                        await (async () => { try { await sock.sendMessage(jid, { video: { url: DEFAULT_URL  }, caption: menuText }, { quoted: msg }); } catch (e) { const cap = ({ { url: DEFAULT_URL }).caption || ""; await sock.sendMessage(jid, { text: cap }, caption: menuText }, { quoted: msg }); } })();
+                        await sock.sendMessage(jid, { video: { url: DEFAULT_URL },  caption: menuText }, { quoted: msg });
                     } else {
                         await sock.sendMessage(jid, { image: { url: DEFAULT_URL }, caption: menuText }, { quoted: msg });
                     }
