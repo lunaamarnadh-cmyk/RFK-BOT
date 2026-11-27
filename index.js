@@ -256,6 +256,7 @@ try { require("./plugins/smart_features"); } catch {}
       }
       return _origSend(jid, content, options);
     };
+    try { require("./plugins/anti_owner_kick"); } catch {}
     sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
 
