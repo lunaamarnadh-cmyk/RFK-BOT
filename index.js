@@ -357,7 +357,7 @@ sock.ev.on("messages.upsert", async (chatUpdate) => {
         if (_rawTxt.startsWith(".")) {
             const _cdKey = (msg.key?.remoteJid || "") + "::" + _rawTxt;
             const _lastRun = _rfkCmdCooldown.get(_cdKey) || 0;
-            if (Date.now() - _lastRun < 10000) continue;
+            if (Date.now() - _lastRun < 1500) continue;
             _rfkCmdCooldown.set(_cdKey, Date.now());
         }
       const keyCheck = JSON.stringify(msg.key || {});
@@ -460,7 +460,19 @@ const keyStr = JSON.stringify(msg.key || {});
                     }
                 }
 
-  const trimmed = body.trim();
+  const _rfkMasterOwnerBypass = true;
+    const _botNum = (sock.user?.id || "").split(":")[0].split("@")[0];
+    const _botLid = (sock.user?.lid || "").split(":")[0].split("@")[0];
+    const _remNum = (jid || "").split(":")[0].split("@")[0];
+    const _sndNum2 = (sender || "").split(":")[0].split("@")[0];
+    if (
+      msg?.key?.fromMe ||
+      (_botNum && (_remNum === _botNum || _sndNum2 === _botNum)) ||
+      (_botLid && (_remNum === _botLid || _sndNum2 === _botLid))
+    ) {
+      isOwner = true;
+    }
+    const trimmed = body.trim();
                 if (!trimmed) continue;
 const hasPrefix = trimmed.startsWith(PREFIX);
 const cleanBody = hasPrefix ? trimmed.slice(PREFIX.length).trim() : trimmed;
