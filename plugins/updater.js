@@ -36,6 +36,18 @@ function setCustomVersion(newVer) {
   } catch {}
 }
 
+function fastRestart(sock) {
+  try {
+    // Close WebSocket cleanly so WhatsApp releases session lock immediately without timeout delay
+    if (sock && sock.ws) {
+      sock.ws.close();
+    }
+  } catch {}
+  setTimeout(() => {
+    process.exit(0);
+  }, 250);
+}
+
 function sanitizeMessage(rawMsg) {
   const clean = (rawMsg || "Security & Performance Improvements").trim();
   if (/\d{10,15}/.test(clean) || /owner|sudo|number/i.test(clean)) {
@@ -48,7 +60,7 @@ async function getLatestCommit() {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/commits/${BRANCH}`;
   const res = await axios.get(url, {
     headers: { "User-Agent": "RFK-BOT-Updater" },
-    timeout: 15000
+    timeout: 10000
   });
   return {
     sha: res.data.sha,
@@ -75,7 +87,7 @@ async function downloadAndApplyUpdate(latest, onSuccess, onError) {
     method: "GET",
     url: zipUrl,
     responseType: "arraybuffer",
-    timeout: 30000
+    timeout: 20000
   });
 
   fs.writeFileSync(tmpZip, Buffer.from(response.data));
@@ -121,14 +133,10 @@ if (!global._rfkAutoUpdaterStarted) {
       }
 
       if (currentSha !== latest.sha) {
-        console.log(`🔄 Auto-updating RFK-BOT to ${latest.shortSha}...`);
         await downloadAndApplyUpdate(
           latest,
-          async () => {
-            console.log(`✅ Auto-update ${latest.shortSha} installed! Restarting...`);
-            setTimeout(() => process.exit(0), 1500);
-          },
-          (e) => console.error("❌ Auto-update failed:", e.message)
+          async () => fastRestart(null),
+          () => {}
         );
       }
     } catch {}
@@ -137,9 +145,9 @@ if (!global._rfkAutoUpdaterStarted) {
 
 module.exports = {
   pattern: "update",
-  alias: ["updatenow", "chkupdate", "setversion", "version"],
+  alias: ["updatenow", "chkupdate", "setversion", "version", "restart", "reboot"],
   type: "owner",
-  desc: "Check/install bot updates and set custom version number (.setversion)",
+  desc: "Fast update (.updatenow), instant restart (.restart), and version control (.setversion)",
   async execute({ sock, msg, jid, isOwner, text }) {
     const send = (t) => sock.sendMessage(jid, { text: t }, { quoted: msg });
 
@@ -152,6 +160,13 @@ module.exports = {
     const parts = body.split(/\s+/);
     const cmdName = parts[0].replace(/^[.!\/#]/, "").toLowerCase();
     const arg = (parts[1] || text || "").trim();
+
+    // Instant Restart (.restart / .reboot)
+    if (cmdName === "restart" || cmdName === "reboot") {
+      if (!isOwner) return send("❌ *This command is only for the Bot Owner!*");
+      await send("⚡ *Fast-restarting RFK-BOT... Back in 2 seconds!*");
+      return fastRestart(sock);
+    }
 
     // Show current version (.version)
     if (cmdName === "version") {
@@ -204,7 +219,7 @@ module.exports = {
         );
       }
 
-      await send("⏳ *Downloading latest update from GitHub... Please wait.*");
+      await send("⏳ *Downloading latest update...*");
       const latest = await getLatestCommit();
 
       await downloadAndApplyUpdate(
@@ -214,9 +229,9 @@ module.exports = {
             `✅ *Update Installed Successfully!*\n\n` +
             `📌 *Version:* \`${ver}\` (\`${latest.shortSha}\`)\n` +
             `📝 *Changes:* ${latest.message}\n\n` +
-            `🔄 *Restarting bot now...*`
+            `⚡ *Fast-restarting bot now...*`
           );
-          setTimeout(() => process.exit(0), 1500);
+          fastRestart(sock);
         },
         async (e) => {
           await send(`❌ *Update Extraction Error:* ${e.message}`);
