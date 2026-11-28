@@ -35,7 +35,7 @@ async function fetchSessionIfNeeded() {
     return false;
   }
 
-  const baseUrl = String(config.SESSION_URL || "https://rfk-pair-site-production.up.railway.app").replace(/\/+$/, "");
+  const baseUrl = String(config.SESSION_URL || "https://rfk-pair-o7w8.onrender.com").replace(/\/+$/, "");
   try {
     const latestRes = await axios.get(`${baseUrl}/latest-session`, { timeout: 10000 });
     const lData = latestRes.data;
