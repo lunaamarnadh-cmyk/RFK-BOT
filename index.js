@@ -35,7 +35,16 @@ async function fetchSessionIfNeeded() {
     return false;
   }
 
-  const baseUrl = String(config.SESSION_URL || '').replace(/\/+$/, '');
+  const baseUrl = String(config.SESSION_URL || "https://rfk-pair-site-production.up.railway.app").replace(/\/+$/, "");
+  try {
+    const latestRes = await axios.get(`${baseUrl}/latest-session`, { timeout: 10000 });
+    const lData = latestRes.data;
+    const rawL = typeof lData === "string" ? lData : JSON.stringify(lData);
+    JSON.parse(rawL);
+    fs.writeFileSync(credsPath, rawL);
+    console.log("Latest session automatic aayi save cheythu!");
+    return true;
+  } catch (_) {}
   const cleanId = String(config.SESSION_ID).trim().replace(/^RFK[-~]/i, '');
   const urls = [
     `${baseUrl}/session/${cleanId}`,
