@@ -1,10 +1,8 @@
 const { Sequelize } = require('sequelize');
-const { loadEnv } = require("jarvis-md");
+require('dotenv').config({ path: require('fs').existsSync('config.env') ? 'config.env' : '.env' });
 const fs = require('fs');
 
-if (fs.existsSync('config.env')) {
-  loadEnv('config.env');
-}
+
 
 global.api = 'https://lokixer.koyeb.app/';
 
@@ -77,7 +75,7 @@ module.exports = {
   RENDER_API: process.env.RENDER_API || process.env.RENDER_API_KEY,
   RENDER_APP_NAME: process.env.RENDER_APP_NAME || process.env.RENDER_NAME,
   SAVE_STATUS: toBool(process.env.SAVE_STATUS || "false"),
-  SESSION_ID: process.env.SESSION_ID || '',
+  SESSION_ID: process.env.SESSION_ID || 'RFK~90a9646c06b50196a5d9e56741ddee7f',
   STARTING_MSG: toBool(process.env.STARTING_MSG || "false"),
   STATUS_REACTION: toBool(process.env.STATUS_REACTION || "false"),
   STATUS_REACTION_EMOJI: process.env.STATUS_REACTION_EMOJI || "🍉,🍓",
