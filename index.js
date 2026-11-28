@@ -1,61 +1,118 @@
-async function startJarvis() {
-  global.Baileys = await import("@whiskeysockets/baileys");
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const config = require('./config');
 
-  global.server = require('./config').VPS ? "VPS" : process.env.B4A_URL ? "BACK4APP" : process.env.PWD?.includes("userland") ? "USERLAND" : process.env.PITCHER_API_BASE_URL?.includes("codesandbox") ? "CODESANDBOX" : process.env.REPLIT_USER ? "REPLIT" : process.env.AWS_REGION ? "AWS" : process.env.TERMUX_VERSION ? "TERMUX" : process.env.DYNO ? "HEROKU" : process.env.KOYEB_APP_ID ? "KOYEB" : process.env.GITHUB_SERVER_URL ? "GITHUB" : process.env.RENDER ? "RENDER" : process.env.RAILWAY_SERVICE_NAME ? "RAILWAY" : process.env.VERCEL ? "VERCEL" : process.env.DIGITALOCEAN_APP_NAME ? "DIGITALOCEAN" : process.env.AZURE_HTTP_FUNCTIONS ? "AZURE" : process.env.NETLIFY ? "NETLIFY" : process.env.FLY_IO ? "FLY_IO" : process.env.CLOUDFLARE_API_TOKEN ? "CLOUDFLARE" : process.env.SPACE_ID ? "HUGGINGFACE" : require("os").platform().toUpperCase();
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason?.stack || reason);
+});
 
-  process.on('unhandledRejection', (reason) => {
-    console.error('[unhandledRejection]', reason?.stack || reason);
-  });
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err?.stack || err);
+});
 
-  process.on('uncaughtException', (err) => {
-    console.error('[uncaughtException]', err?.stack || err);
-  });
+const port = Number(config.PORT) || 3000;
 
-  const http = require('http');
-  const axios = require('axios');
-  const PORT = typeof process.env.PORT === "string" && !Number.isNaN(Number(process.env.PORT))
-    ? Number(process.env.PORT)
-    : Math.floor(Math.random() * (9999 - 3000 + 1)) + 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('RFK-BOT is running');
+}).listen(port, () => {
+  console.log('HTTP server listening on port', port);
+});
 
-  const { Jarvis } = require("./lib/Base/");
-  const { removeFiles } = require("./plugins/client/");
-  const url = global.server === "BACK4APP" ? process.env.B4A_URL : global.server === "RENDER" ? process.env.RENDER_EXTERNAL_URL : global.server === "KOYEB" ? "https://" + process.env.KOYEB_PUBLIC_DOMAIN : false;
-
-  if (global.server === "BACK4APP") {
-    process.env.NODE_OPTIONS = '--max-old-space-size=200';
-  } else {
-    process.env.NODE_OPTIONS = `--max-old-space-size=${Math.floor((require('os').totalmem() / (1024 * 1024)) * 0.6)}`;
+async function fetchSession() {
+  if (!config.SESSION_ID) {
+    console.log('SESSION_ID set ചെയ്തിട്ടില്ല.');
+    return false;
   }
 
-  http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Server is Running!');
-  }).listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT} as ${global.server}`);
-  });
+  const baseUrl = String(config.SESSION_URL || '').replace(/\/+$/, '');
+  const cleanId = String(config.SESSION_ID).trim().replace(/^RFK[-~]/i, '');
+  const urls = [
+    `${baseUrl}/session/${cleanId}`,
+    `${baseUrl}/session/${encodeURIComponent(config.SESSION_ID.trim())}`
+  ];
 
-  setInterval(() => {
-    removeFiles("./");
-    removeFiles("./lib/temp");
+  fs.mkdirSync('./session', { recursive: true });
 
-    if (url) {
-      axios.get(url, {
-        timeout: 5000,
-        headers: { 'User-Agent': 'Uptime-Bot' },
-        validateStatus: s => s < 500
-      }).then(r =>
-        console.log(`[${new Date().toISOString()}] Keep-alive Ping to ${url} - Status: ${r.status}`)
-      ).catch(e =>
-        console.log(`[${new Date().toISOString()}] Ping Failed! ${e.message}`)
-      );
+  for (const url of urls) {
+    try {
+      const res = await axios.get(url, { timeout: 15000 });
+      const data = res.data;
+
+      if (data && typeof data === 'object' && data.creds) {
+        fs.writeFileSync('./session/creds.json', JSON.stringify(data.creds, null, 2));
+        console.log('creds.json സേവ് ചെയ്തു:', url);
+        return true;
+      }
+
+      const raw = typeof data === 'string' ? data : JSON.stringify(data);
+      const b64 = raw.includes('~') ? raw.split('~').slice(1).join('~') : raw;
+      const decoded = Buffer.from(b64, 'base64').toString('utf8');
+      JSON.parse(decoded);
+      fs.writeFileSync('./session/creds.json', decoded);
+      console.log('Encoded creds.json സേവ് ചെയ്തു:', url);
+      return true;
+    } catch (err) {
+      console.log('Fetch try failed:', url, '-', err.message);
     }
-  }, 5 * 60 * 1000);
+  }
 
-  await new Promise(r => setTimeout(r, 3000));
-  Jarvis({ isStarted: true });
+  console.log('സെർവറിൽ നിന്ന് creds.json എടുക്കാൻ കഴിഞ്ഞില്ല.');
+  return false;
 }
 
-startJarvis().catch((error) => {
-  console.error("[Jarvis startup error]", error?.stack || error);
-  process.exit(1);
-});
+async function startBot() {
+  try {
+    const baileys = await import('@whiskeysockets/baileys');
+    const makeWASocket = baileys.default || baileys.makeWASocket;
+    const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = baileys;
+
+    await fetchSession();
+
+    const { state, saveCreds } = await useMultiFileAuthState('./session');
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: true,
+      browser: ['RFK-BOT', 'Chrome', '1.0.0']
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect } = update;
+      if (connection === 'open') {
+        console.log('WhatsApp കണക്ട് ആയി (WORK_TYPE:', config.WORK_TYPE + ')');
+      } else if (connection === 'close') {
+        const code = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = code !== DisconnectReason.loggedOut;
+        console.log('Connection closed. Code:', code, 'Reconnect:', shouldReconnect);
+        if (shouldReconnect) {
+          setTimeout(startBot, 3000);
+        }
+      }
+    });
+
+    const pluginsDir = path.join(__dirname, 'plugins');
+    if (fs.existsSync(pluginsDir)) {
+      const files = fs.readdirSync(pluginsDir).filter((f) => f.endsWith('.js'));
+      for (const file of files) {
+        try {
+          require(path.join(pluginsDir, file));
+        } catch (err) {
+          console.error('[Plugin error]', file, err.message);
+        }
+      }
+      console.log('Loaded plugins:', files.length);
+    }
+  } catch (err) {
+    console.error('[startBot error]', err?.stack || err);
+    setTimeout(startBot, 5000);
+  }
+}
+
+startBot();
