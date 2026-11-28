@@ -21,9 +21,17 @@ http.createServer((req, res) => {
   console.log('HTTP server listening on port', port);
 });
 
-async function fetchSession() {
+async function fetchSessionIfNeeded() {
+  fs.mkdirSync('./session', { recursive: true });
+  const credsPath = path.join('./session', 'creds.json');
+
+  if (fs.existsSync(credsPath)) {
+    console.log('നിലവിലുള്ള session/creds.json ഉപയോഗിക്കുന്നു.');
+    return true;
+  }
+
   if (!config.SESSION_ID) {
-    console.log('SESSION_ID set ചെയ്തിട്ടില്ല.');
+    console.log('SESSION_ID set ചെയ്തിട്ടില്ല; Pairing code രീതിയിലേക്ക് മാറുന്നു.');
     return false;
   }
 
@@ -34,15 +42,13 @@ async function fetchSession() {
     `${baseUrl}/session/${encodeURIComponent(config.SESSION_ID.trim())}`
   ];
 
-  fs.mkdirSync('./session', { recursive: true });
-
   for (const url of urls) {
     try {
       const res = await axios.get(url, { timeout: 15000 });
       const data = res.data;
 
       if (data && typeof data === 'object' && data.creds) {
-        fs.writeFileSync('./session/creds.json', JSON.stringify(data.creds, null, 2));
+        fs.writeFileSync(credsPath, JSON.stringify(data.creds, null, 2));
         console.log('creds.json സേവ് ചെയ്തു:', url);
         return true;
       }
@@ -51,7 +57,7 @@ async function fetchSession() {
       const b64 = raw.includes('~') ? raw.split('~').slice(1).join('~') : raw;
       const decoded = Buffer.from(b64, 'base64').toString('utf8');
       JSON.parse(decoded);
-      fs.writeFileSync('./session/creds.json', decoded);
+      fs.writeFileSync(credsPath, decoded);
       console.log('Encoded creds.json സേവ് ചെയ്തു:', url);
       return true;
     } catch (err) {
@@ -59,7 +65,7 @@ async function fetchSession() {
     }
   }
 
-  console.log('സെർവറിൽ നിന്ന് creds.json എടുക്കാൻ കഴിഞ്ഞില്ല.');
+  console.log('സെഷൻ ലഭിച്ചില്ല; Pairing code ഉപയോഗിച്ച് കണക്ട് ചെയ്യാം.');
   return false;
 }
 
@@ -69,7 +75,7 @@ async function startBot() {
     const makeWASocket = baileys.default || baileys.makeWASocket;
     const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = baileys;
 
-    await fetchSession();
+    await fetchSessionIfNeeded();
 
     const { state, saveCreds } = await useMultiFileAuthState('./session');
     const { version } = await fetchLatestBaileysVersion();
@@ -77,9 +83,27 @@ async function startBot() {
     const sock = makeWASocket({
       version,
       auth: state,
-      printQRInTerminal: true,
-      browser: ['RFK-BOT', 'Chrome', '1.0.0']
+      printQRInTerminal: false,
+      browser: ['Ubuntu', 'Chrome', '20.0.04']
     });
+
+    const rawPhone = (process.env.PAIR_NUMBER || config.SUDO?.[0] || '').replace(/[^0-9]/g, '');
+    if (!sock.authState.creds.registered) {
+      if (rawPhone) {
+        setTimeout(async () => {
+          try {
+            const code = await sock.requestPairingCode(rawPhone);
+            console.log('====================================');
+            console.log('WHATSAPP PAIRING CODE:', code);
+            console.log('====================================');
+          } catch (err) {
+            console.error('Pairing code എടുക്കാൻ കഴിഞ്ഞില്ല:', err.message);
+          }
+        }, 3000);
+      } else {
+        console.log('Pairing code എടുക്കാൻ Railway Variables-ൽ PAIR_NUMBER (ഉദാ: 91XXXXXXXXXX) ചേർക്കുക.');
+      }
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
